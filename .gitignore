@@ -1,0 +1,6 @@
+# ビルド成果物
+QuotaGauge.exe
+*.pdb
+
+# 実行時に生成されるもの
+*.log
