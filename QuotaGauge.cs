@@ -17,6 +17,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -43,11 +44,16 @@ class Limit {
 
   public bool IsCritical { get { return Severity == "critical" || Percent >= 90; } }
 
+  // リセット時刻が過去を指していることがある（提供側の値がそうなっている）。
+  // その場合は残り時間を出さない。おかしな値を自信ありげに見せない方がいい
+  public bool ResetIsUsable {
+    get { return ResetsAt.HasValue && (ResetsAt.Value - DateTime.Now).TotalSeconds > 0; }
+  }
+
   public string Remaining {
     get {
-      if (!ResetsAt.HasValue) return "";
+      if (!ResetIsUsable) return "";
       TimeSpan t = ResetsAt.Value - DateTime.Now;
-      if (t.TotalSeconds <= 0) return "まもなくリセット";
       if (t.TotalHours >= 1) return string.Format("あと {0}時間{1}分", (int)t.TotalHours, t.Minutes);
       return string.Format("あと {0}分", Math.Max(1, (int)t.TotalMinutes));
     }
@@ -55,6 +61,7 @@ class Limit {
 }
 
 class Provider {
+  public string Key = "";          // "claude" / "codex"
   public string Name = "";
   public string Note;              // プラン名など
   public DateTime? DataTime;       // 値そのものの鮮度（取得時刻ではない）
@@ -64,12 +71,23 @@ class Provider {
   public string Heading {
     get {
       string s = string.IsNullOrEmpty(Note) ? Name : Name + " · " + Note;
-      if (DataTime.HasValue) {
-        int min = (int)(DateTime.Now - DataTime.Value).TotalMinutes;
-        if (min >= 2) s += "（" + (min >= 120 ? (min / 60) + "時間前" : min + "分前") + "の値）";
-      }
+      // 鮮度は常に出す。値がいつのものか分からないと、他の表示との数%のズレを誤解する
+      if (DataTime.HasValue) s += "（" + Ago(DataTime.Value) + "の値）";
       return s;
     }
+  }
+
+  // 値が古いほど、他所の表示とズレる。何分前かを見せておく
+  public bool IsStale {
+    get { return DataTime.HasValue && (DateTime.Now - DataTime.Value).TotalMinutes >= 5; }
+  }
+
+  static string Ago(DateTime t) {
+    int sec = (int)(DateTime.Now - t).TotalSeconds;
+    if (sec < 45) return "たった今";
+    int min = (int)Math.Round(sec / 60.0);
+    if (min < 60) return min + "分前";
+    return (min / 60) + "時間前";
   }
 }
 
@@ -77,26 +95,31 @@ class Snapshot {
   public List<Provider> Providers = new List<Provider>();
   public DateTime FetchedAt;
 
-  public int Worst {
-    get {
-      int max = 0;
-      foreach (var p in Providers) foreach (var l in p.Limits) if (l.Percent > max) max = l.Percent;
-      return max;
-    }
+  // source が "claude"/"codex" ならそのプロバイダだけ、それ以外なら全部を見る
+  static bool Match(Provider p, string source) {
+    return source != "claude" && source != "codex" ? true : p.Key == source;
   }
 
-  public bool AnyCritical {
-    get {
-      foreach (var p in Providers) foreach (var l in p.Limits) if (l.IsCritical) return true;
-      return false;
+  public int WorstOf(string source) {
+    int max = 0;
+    foreach (var p in Providers) {
+      if (!Match(p, source)) continue;
+      foreach (var l in p.Limits) if (l.Percent > max) max = l.Percent;
     }
+    return max;
   }
 
-  public bool AnyData {
-    get {
-      foreach (var p in Providers) if (p.Limits.Count > 0) return true;
-      return false;
+  public bool CriticalIn(string source) {
+    foreach (var p in Providers) {
+      if (!Match(p, source)) continue;
+      foreach (var l in p.Limits) if (l.IsCritical) return true;
     }
+    return false;
+  }
+
+  public bool HasDataIn(string source) {
+    foreach (var p in Providers) if (Match(p, source) && p.Limits.Count > 0) return true;
+    return false;
   }
 
   public int RowCount {
@@ -141,6 +164,37 @@ static class Json {
     return null;
   }
 
+  public static DateTime? Iso(string s, string key) {
+    string v = Str(s, key);
+    DateTime dt;
+    if (!string.IsNullOrEmpty(v) &&
+        DateTime.TryParse(v, CultureInfo.InvariantCulture,
+                          DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out dt))
+      return dt.ToLocalTime();
+    return null;
+  }
+
+  // オブジェクト配列を要素ごとの文字列に切り出す
+  public static List<string> Objects(string json, string key) {
+    var list = new List<string>();
+    int at = json.IndexOf("\"" + key + "\"");
+    if (at < 0) return list;
+    int open = json.IndexOf('[', at);
+    if (open < 0) return list;
+
+    int depth = 1, objStart = -1;
+    for (int i = open + 1; i < json.Length; i++) {
+      char c = json[i];
+      if (c == ']' && depth == 1) break;
+      if (c == '{') { if (depth == 1) objStart = i; depth++; }
+      else if (c == '}') {
+        depth--;
+        if (depth == 1 && objStart >= 0) { list.Add(json.Substring(objStart, i - objStart + 1)); objStart = -1; }
+      }
+    }
+    return list;
+  }
+
   public static DateTime FromUnix(double seconds) {
     return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(seconds).ToLocalTime();
   }
@@ -157,6 +211,73 @@ static class Json {
 // ステータスラインへ公式に渡される rate_limits を、statusline スクリプトが書いたキャッシュから読む。
 // 認証情報もネットワークアクセスも使わない。
 static class ClaudeApi {
+  public static Provider Fetch() {
+    return Config.ClaudeSource == "statusline" ? FromStatusLine() : FromEndpoint();
+  }
+
+  // --- 既定：Claude Code 自身が使っているのと同じ問い合わせ先から直接読む -----------
+  // 5時間枠・週次に加えてモデル別の枠まで返り、リセット時刻も正確。
+  // ただし公開されたインターフェースではない（README の注意書きを参照）
+  const string Url = "https://api.anthropic.com/api/oauth/usage";
+  const string Beta = "oauth-2025-04-20";
+
+  static string CredentialsPath {
+    get {
+      return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                          ".claude", ".credentials.json");
+    }
+  }
+
+  static Provider FromEndpoint() {
+    var p = new Provider { Key = "claude", Name = "Claude Code" };
+    try {
+      string cred = File.ReadAllText(CredentialsPath, Encoding.UTF8);
+      var tok = Regex.Match(cred, "\"accessToken\"\\s*:\\s*\"([^\"]+)\"");
+      if (!tok.Success) throw new Exception("Claude Code にログインしていません");
+
+      ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+      var req = (HttpWebRequest)WebRequest.Create(Url);
+      req.Method = "GET";
+      req.Timeout = 15000;
+      req.UserAgent = "QuotaGauge";
+      req.Headers["Authorization"] = "Bearer " + tok.Groups[1].Value;
+      req.Headers["anthropic-beta"] = Beta;
+
+      string body;
+      using (var res = (HttpWebResponse)req.GetResponse())
+      using (var sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+        body = sr.ReadToEnd();
+
+      foreach (var obj in Json.Objects(body, "limits")) {
+        var l = new Limit();
+        l.Percent  = (int)Math.Round(Json.Num(obj, "percent") ?? 0);
+        l.Severity = Json.Str(obj, "severity") ?? "normal";
+        l.ResetsAt = Json.Iso(obj, "resets_at");
+
+        string kind = Json.Str(obj, "kind") ?? "";
+        var scope = Regex.Match(obj, "\"scope\"\\s*:\\s*\\{.*?\"display_name\"\\s*:\\s*\"([^\"]+)\"",
+                                RegexOptions.Singleline);
+        if (scope.Success)             l.Label = "週次（" + scope.Groups[1].Value + "）";
+        else if (kind == "session")    l.Label = "5時間枠";
+        else if (kind == "weekly_all") l.Label = "週次（全体）";
+        else                           l.Label = kind;
+
+        p.Limits.Add(l);
+      }
+      p.DataTime = DateTime.Now;
+      if (p.Limits.Count == 0) p.Error = "利用枠の情報が空でした";
+    } catch (WebException wex) {
+      var r = wex.Response as HttpWebResponse;
+      p.Error = r != null ? "取得できません (HTTP " + (int)r.StatusCode + ")" : "取得できません: " + wex.Message;
+    } catch (Exception ex) {
+      p.Error = ex.Message;
+    }
+    return p;
+  }
+
+  // --- もう一方：ステータスライン経由 ------------------------------------------
+  // 公開された経路だけで動くが、渡ってくる値の精度は上に劣る
+  // （5時間枠のリセット時刻が過去を指すことがある／モデル別の枠は含まれない）
   public static string CachePath {
     get {
       return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -164,30 +285,28 @@ static class ClaudeApi {
     }
   }
 
-  public static Provider Fetch() {
-    var p = new Provider { Name = "Claude Code" };
+  static Provider FromStatusLine() {
+    var p = new Provider { Key = "claude", Name = "Claude Code" };
     try {
       if (!File.Exists(CachePath)) {
         p.Error = "ステータスラインの設定が必要です（README参照）";
         return p;
       }
       string json = File.ReadAllText(CachePath, Encoding.UTF8);
-
-      Add(p, json, "five_hour", "5時間枠");
-      Add(p, json, "seven_day", "週次");
+      AddCached(p, json, "five_hour", "5時間枠");
+      AddCached(p, json, "seven_day", "週次");
 
       double? upd = Json.Num(json, "updated_at");
       if (upd.HasValue) p.DataTime = Json.FromUnix(upd.Value);
 
-      if (p.Limits.Count == 0)
-        p.Error = "利用枠の情報がありません（サブスクリプション契約時のみ取得できます）";
+      if (p.Limits.Count == 0) p.Error = "利用枠の情報がありません";
     } catch (Exception ex) {
       p.Error = ex.Message;
     }
     return p;
   }
 
-  static void Add(Provider p, string json, string key, string label) {
+  static void AddCached(Provider p, string json, string key, string label) {
     string obj = Json.Object(json, key);
     if (obj == null) return;
     double? pct = Json.Num(obj, "used_percentage");
@@ -206,7 +325,7 @@ static class ClaudeApi {
 // 公開されているスキーマに定義されているもの。
 static class CodexApi {
   public static Provider Fetch() {
-    var p = new Provider { Name = "Codex" };
+    var p = new Provider { Key = "codex", Name = "Codex" };
     try {
       string res = Call();
       if (res == null) { p.Error = "codex app-server から応答がありません"; return p; }
@@ -361,6 +480,20 @@ class QuotaPanel : Form {
     Deactivate += delegate { Hide(); };
   }
 
+  // 取得し直した結果をパネルへ反映する。
+  // これを呼ばないと、開いたときの値を描き続けて「更新しても何も変わらない」ように見える
+  public void UpdateSnapshot(Snapshot s) {
+    snap = s;
+    if (Visible) Invalidate();
+  }
+
+  // 押しても何も起きないように見えると、更新できたのか分からない
+  public void SetBusy(bool busy) {
+    refreshBtn.Enabled = !busy;
+    refreshBtn.Text = busy ? "更新中" : "更新";
+    refreshBtn.Refresh();
+  }
+
   public void ShowAt(Snapshot s, Point anchor) {
     snap = s;
 
@@ -397,7 +530,8 @@ class QuotaPanel : Form {
         g.DrawString("読み込み中…", fLabel, b, 16, y + 8);
     } else {
       foreach (var pv in snap.Providers) {
-        using (var b = new SolidBrush(Palette.Heading))
+        // 値が古いときは見出しの色を変えて、他所の表示とのズレに気づけるようにする
+        using (var b = new SolidBrush(pv.IsStale ? Palette.BarWarn : Palette.Heading))
           g.DrawString(pv.Heading, fHeading, b, 16, y);
         y += HeadH;
 
@@ -435,10 +569,8 @@ class QuotaPanel : Form {
 
     // 使った量（右上の数字）と、まだ使える量を両方見せる
     string sub = "残り " + Math.Max(0, 100 - l.Percent) + "%";
-    if (!string.IsNullOrEmpty(l.Remaining)) {
-      sub += " ・ " + l.Remaining;
-      if (l.ResetsAt.HasValue) sub += "（" + l.ResetsAt.Value.ToString("M/d HH:mm") + "）";
-    }
+    if (l.ResetIsUsable)
+      sub += " ・ " + l.Remaining + "（" + l.ResetsAt.Value.ToString("M/d HH:mm") + "）";
     using (var b = new SolidBrush(Palette.SubText))
       g.DrawString(sub, fSub, b, 16, barY + 11);
   }
@@ -485,6 +617,8 @@ class TrayApp : ApplicationContext {
   }
 
   void Reload() {
+    try { panel.SetBusy(true); } catch { }
+
     var t = new Thread(delegate () {
       Snapshot s;
       try { s = Usage.FetchAll(); }
@@ -495,8 +629,8 @@ class TrayApp : ApplicationContext {
 
       MethodInvoker apply = delegate {
         snap = s;
+        try { panel.UpdateSnapshot(s); panel.SetBusy(false); } catch { }
         UpdateIcon();
-        if (panel.Visible) panel.Invalidate();
         foreach (var p in s.Providers)
           if (p.Error != null) Log.Write(p.Name + ": " + p.Error);
       };
@@ -512,10 +646,11 @@ class TrayApp : ApplicationContext {
   // 使用率をリング（円弧）で描く。32pxに数字を入れても読めないので、量は角度で示す
   void UpdateIcon() {
     try {
-      bool hasData = snap != null && snap.AnyData;
-      int pct = hasData ? snap.Worst : 0;
+      string src = Config.IconSource;
+      bool hasData = snap != null && snap.HasDataIn(src);
+      int pct = hasData ? snap.WorstOf(src) : 0;
       Color color = !hasData ? Palette.IconTrack
-                  : (snap.AnyCritical ? Palette.IconCrit
+                  : (snap.CriticalIn(src) ? Palette.IconCrit
                   : (pct >= 70 ? Palette.IconWarn : Palette.IconOk));
 
       using (var bmp = new Bitmap(32, 32))
@@ -585,6 +720,18 @@ class TrayApp : ApplicationContext {
 
     menu.Items.Add(new ToolStripSeparator());
 
+    // 主に使うツールは人によって違うので、アイコンが映す対象を選べるようにする
+    var iconSrc = new ToolStripMenuItem("アイコンに出す対象");
+    AddIconSource(iconSrc, "both",   "厳しい方");
+    AddIconSource(iconSrc, "claude", "Claude Code");
+    AddIconSource(iconSrc, "codex",  "Codex");
+    menu.Items.Add(iconSrc);
+
+    var claudeSrc = new ToolStripMenuItem("Claude の取得元");
+    AddClaudeSource(claudeSrc, "endpoint",   "Claude Code と同じ経路（正確）");
+    AddClaudeSource(claudeSrc, "statusline", "ステータスライン経由（公開経路のみ）");
+    menu.Items.Add(claudeSrc);
+
     var startup = new ToolStripMenuItem("Windows起動時に開始");
     startup.Checked = RunAtStartup;
     startup.Click += delegate { RunAtStartup = !RunAtStartup; };
@@ -601,6 +748,20 @@ class TrayApp : ApplicationContext {
     menu.Items.Add(quit);
   }
 
+  void AddIconSource(ToolStripMenuItem root, string key, string label) {
+    var item = new ToolStripMenuItem(label);
+    item.Checked = (Config.IconSource == key);
+    item.Click += delegate { Config.IconSource = key; UpdateIcon(); };
+    root.DropDownItems.Add(item);
+  }
+
+  void AddClaudeSource(ToolStripMenuItem root, string key, string label) {
+    var item = new ToolStripMenuItem(label);
+    item.Checked = (Config.ClaudeSource == key);
+    item.Click += delegate { Config.ClaudeSource = key; Reload(); };
+    root.DropDownItems.Add(item);
+  }
+
   static bool RunAtStartup {
     get {
       using (var k = Registry.CurrentUser.OpenSubKey(RunKey))
@@ -613,6 +774,51 @@ class TrayApp : ApplicationContext {
         else k.DeleteValue(RunValue, false);
       }
     }
+  }
+}
+
+static class Config {
+  public static string Path {
+    get {
+      return System.IO.Path.Combine(
+        System.IO.Path.GetDirectoryName(Application.ExecutablePath), "config.json");
+    }
+  }
+
+  static string Read(string key, string fallback) {
+    try {
+      if (!File.Exists(Path)) return fallback;
+      var m = Regex.Match(File.ReadAllText(Path, Encoding.UTF8),
+                          "\"" + key + "\"\\s*:\\s*\"([^\"]*)\"");
+      return (m.Success && m.Groups[1].Value.Length > 0) ? m.Groups[1].Value : fallback;
+    } catch { return fallback; }
+  }
+
+  static void Write(string iconSource, string claudeSource) {
+    try {
+      File.WriteAllText(Path,
+        "{\r\n" +
+        "  \"_comment\": \"iconSource: which provider the tray icon reflects (both|claude|codex). " +
+        "claudeSource: where Claude numbers come from (endpoint|statusline).\",\r\n" +
+        "  \"iconSource\": \"" + iconSource + "\",\r\n" +
+        "  \"claudeSource\": \"" + claudeSource + "\"\r\n" +
+        "}\r\n", new UTF8Encoding(false));
+    } catch { }
+  }
+
+  // アイコンがどのプロバイダを映すか。"both"（既定）/ "claude" / "codex"
+  // 主に使うツールが人によって違うので、選べるようにしてある
+  public static string IconSource {
+    get { return Read("iconSource", "both"); }
+    set { Write(value, ClaudeSource); }
+  }
+
+  // Claude の数値をどこから取るか。
+  //   "endpoint"（既定）  … Claude Code と同じ問い合わせ先。モデル別の枠まで出て、リセット時刻も正確
+  //   "statusline"        … 公開された経路だけを使う。値の精度は落ちる
+  public static string ClaudeSource {
+    get { return Read("claudeSource", "endpoint"); }
+    set { Write(IconSource, value); }
   }
 }
 
