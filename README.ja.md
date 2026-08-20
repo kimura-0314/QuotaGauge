@@ -180,6 +180,12 @@ QuotaGauge はその代わりに作ったもので、ずっと小さく、Swift 
 
 Mac なら CodexBar を入れたほうがいい。できることはあちらの方がずっと多い。
 
+## 作った人
+
+kimura — [X](https://x.com/kimura_0314) ・ [note](https://note.com/cozy_auklet6005) ・ [kimuraのGAS部](https://note.com/cozy_auklet6005/membership) ・ [Zenn](https://zenn.dev/kimura0314) ・ [YouTube](https://www.youtube.com/@kimura_1307)
+
+GAS まわりの道具を作って、その話を書いています。
+
 ## 免責
 
 このプロジェクトは非公式で、Anthropic および OpenAI とは関係がありません。
