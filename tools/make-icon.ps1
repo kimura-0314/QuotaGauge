@@ -1,4 +1,4 @@
-<#
+﻿<#
   make-icon.ps1 — app.ico を生成する
 
   トレイに描いているリングと同じ図形を、同じ System.Drawing で描く。
