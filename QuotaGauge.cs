@@ -29,15 +29,34 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyTitle("利用枠ゲージ")]
+[assembly: System.Reflection.AssemblyTitle("QuotaGauge")]
 [assembly: System.Reflection.AssemblyProduct("QuotaGauge")]
-[assembly: System.Reflection.AssemblyDescription("Claude Code と Codex の利用枠を通知領域に表示する")]
+[assembly: System.Reflection.AssemblyDescription("Shows Claude Code and Codex quota in the notification area")]
 [assembly: System.Reflection.AssemblyCompany("kimura")]
 [assembly: System.Reflection.AssemblyCopyright("MIT License")]
-[assembly: System.Reflection.AssemblyVersion("2.1.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.1.1.0")]
+[assembly: System.Reflection.AssemblyVersion("2.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.2.0.0")]
 
 namespace QuotaGauge {
+
+// 表示言語。日本語と英語を呼び出し側で隣に並べて持つ。
+// 別の場所に対訳表を作ると片方だけ古くなるので、必ず同じ行に置く
+static class S {
+  static bool? ja;
+
+  public static bool Ja {
+    get {
+      if (ja.HasValue) return ja.Value;
+      string cfg = Config.Language;                       // auto / ja / en
+      if (cfg == "ja")      ja = true;
+      else if (cfg == "en") ja = false;
+      else ja = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ja";
+      return ja.Value;
+    }
+  }
+
+  public static string T(string japanese, string english) { return Ja ? japanese : english; }
+}
 
 // ------------------------------------------------------------------ データ
 class Limit {
@@ -58,8 +77,8 @@ class Limit {
     get {
       if (!ResetIsUsable) return "";
       TimeSpan t = ResetsAt.Value - DateTime.Now;
-      if (t.TotalHours >= 1) return string.Format("あと {0}時間{1}分", (int)t.TotalHours, t.Minutes);
-      return string.Format("あと {0}分", Math.Max(1, (int)t.TotalMinutes));
+      if (t.TotalHours >= 1) return string.Format(S.T("あと {0}時間{1}分", "resets in {0}h {1}m"), (int)t.TotalHours, t.Minutes);
+      return string.Format(S.T("あと {0}分", "resets in {0}m"), Math.Max(1, (int)t.TotalMinutes));
     }
   }
 }
@@ -76,7 +95,7 @@ class Provider {
     get {
       string s = string.IsNullOrEmpty(Note) ? Name : Name + " · " + Note;
       // 鮮度は常に出す。値がいつのものか分からないと、他の表示との数%のズレを誤解する
-      if (DataTime.HasValue) s += "（" + Ago(DataTime.Value) + "の値）";
+      if (DataTime.HasValue) s += S.T("（", " (") + Ago(DataTime.Value) + S.T("の値）", ")");
       return s;
     }
   }
@@ -88,10 +107,10 @@ class Provider {
 
   static string Ago(DateTime t) {
     int sec = (int)(DateTime.Now - t).TotalSeconds;
-    if (sec < 45) return "たった今";
+    if (sec < 45) return S.T("たった今", "just now");
     int min = (int)Math.Round(sec / 60.0);
-    if (min < 60) return min + "分前";
-    return (min / 60) + "時間前";
+    if (min < 60) return min + S.T("分前", "m ago");
+    return (min / 60) + S.T("時間前", "h ago");
   }
 }
 
@@ -204,10 +223,10 @@ static class Json {
   }
 
   public static string WindowLabel(double minutes) {
-    if (minutes >= 60 * 24 * 6.5) return "週次";
-    if (minutes >= 60 * 24) return ((int)Math.Round(minutes / (60 * 24))) + "日枠";
-    if (minutes >= 60) return ((int)Math.Round(minutes / 60)) + "時間枠";
-    return ((int)Math.Round(minutes)) + "分枠";
+    if (minutes >= 60 * 24 * 6.5) return S.T("週次", "Weekly");
+    if (minutes >= 60 * 24) return ((int)Math.Round(minutes / (60 * 24))) + S.T("日枠", "-day");
+    if (minutes >= 60) return ((int)Math.Round(minutes / 60)) + S.T("時間枠", "-hour");
+    return ((int)Math.Round(minutes)) + S.T("分枠", "-min");
   }
 }
 
@@ -234,16 +253,16 @@ static class ClaudeApi {
     var p = new Provider { Key = "claude", Name = "Claude Code" };
     try {
       string res = CallClaude();
-      if (res == null) { p.Error = "claude から応答がありません（PATH とログイン状態を確認）"; return p; }
+      if (res == null) { p.Error = S.T("claude から応答がありません（PATH とログイン状態を確認）", "No response from claude (check your PATH and that you are signed in)"); return p; }
       if (Json.Str(res, "subtype") == "error") {
-        p.Error = Json.Str(res, "error") ?? "利用枠を取得できませんでした";
+        p.Error = Json.Str(res, "error") ?? S.T("利用枠を取得できませんでした", "Could not read the usage data");
         return p;
       }
 
       p.Note = Json.Str(res, "subscription_type");
       ParseLimits(p, res);
       p.DataTime = DateTime.Now;
-      if (p.Limits.Count == 0) p.Error = "利用枠の情報が空でした";
+      if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
     } catch (Exception ex) {
       p.Error = ex.Message;
     }
@@ -306,9 +325,9 @@ static class ClaudeApi {
       string kind = Json.Str(obj, "kind") ?? "";
       var scope = Regex.Match(obj, "\"scope\"\\s*:\\s*\\{.*?\"display_name\"\\s*:\\s*\"([^\"]+)\"",
                               RegexOptions.Singleline);
-      if (scope.Success)             l.Label = "週次（" + scope.Groups[1].Value + "）";
-      else if (kind == "session")    l.Label = "5時間枠";
-      else if (kind == "weekly_all") l.Label = "週次（全体）";
+      if (scope.Success)             l.Label = S.T("週次（", "Weekly (") + scope.Groups[1].Value + S.T("）", ")");
+      else if (kind == "session")    l.Label = S.T("5時間枠", "5-hour");
+      else if (kind == "weekly_all") l.Label = S.T("週次（全体）", "Weekly (all)");
       else                           l.Label = kind;
 
       p.Limits.Add(l);
@@ -343,7 +362,7 @@ static class ClaudeApi {
 
   static string WaitLabel(TimeSpan t) {
     int m = (int)Math.Ceiling(t.TotalMinutes);
-    return m >= 60 ? (m / 60) + "時間" : m + "分";
+    return m >= 60 ? (m / 60) + S.T("時間", "h") : m + S.T("分", "m");
   }
 
   static string CredentialsPath {
@@ -357,14 +376,14 @@ static class ClaudeApi {
     var p = new Provider { Key = "claude", Name = "Claude Code" };
 
     if (DateTime.Now < retryAfter) {
-      p.Error = lastError + "（" + WaitLabel(retryAfter - DateTime.Now) + "後に再試行）";
+      p.Error = lastError + string.Format(S.T("（{0}後に再試行）", " (retrying in {0})"), WaitLabel(retryAfter - DateTime.Now));
       return p;
     }
 
     try {
       string cred = File.ReadAllText(CredentialsPath, Encoding.UTF8);
       var tok = Regex.Match(cred, "\"accessToken\"\\s*:\\s*\"([^\"]+)\"");
-      if (!tok.Success) throw new Exception("Claude Code にログインしていません");
+      if (!tok.Success) throw new Exception(S.T("Claude Code にログインしていません", "You are not signed in to Claude Code"));
 
       ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
       var req = (HttpWebRequest)WebRequest.Create(Url);
@@ -381,16 +400,16 @@ static class ClaudeApi {
 
       ParseLimits(p, body);
       p.DataTime = DateTime.Now;
-      if (p.Limits.Count == 0) p.Error = "利用枠の情報が空でした";
+      if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
       ResetBackoff();
     } catch (WebException wex) {
       var r = wex.Response as HttpWebResponse;
       int code = r != null ? (int)r.StatusCode : 0;
       // 何が起きているか分からないと直しようがないので、コードごとに次の一手を書く
-      if (code == 401)      p.Error = "ログインし直してください（トークンの期限切れ・HTTP 401）";
-      else if (code == 429) p.Error = "問い合わせが多すぎます（HTTP 429）";
-      else if (code != 0)   p.Error = "取得できません (HTTP " + code + ")";
-      else                  p.Error = "取得できません: " + wex.Message;
+      if (code == 401)      p.Error = S.T("ログインし直してください（トークンの期限切れ・HTTP 401）", "Sign in to Claude Code again (token expired, HTTP 401)");
+      else if (code == 429) p.Error = S.T("問い合わせが多すぎます（HTTP 429）", "Too many requests (HTTP 429)");
+      else if (code != 0)   p.Error = S.T("取得できません (HTTP ", "Could not fetch (HTTP ") + code + ")";
+      else                  p.Error = S.T("取得できません: ", "Could not fetch: ") + wex.Message;
       Backoff(p.Error);
     } catch (Exception ex) {
       p.Error = ex.Message;
@@ -413,17 +432,17 @@ static class ClaudeApi {
     var p = new Provider { Key = "claude", Name = "Claude Code" };
     try {
       if (!File.Exists(CachePath)) {
-        p.Error = "ステータスラインの設定が必要です（README参照）";
+        p.Error = S.T("ステータスラインの設定が必要です（README参照）", "The status line needs to be set up (see the README)");
         return p;
       }
       string json = File.ReadAllText(CachePath, Encoding.UTF8);
-      AddCached(p, json, "five_hour", "5時間枠");
-      AddCached(p, json, "seven_day", "週次");
+      AddCached(p, json, "five_hour", S.T("5時間枠", "5-hour"));
+      AddCached(p, json, "seven_day", S.T("週次", "Weekly"));
 
       double? upd = Json.Num(json, "updated_at");
       if (upd.HasValue) p.DataTime = Json.FromUnix(upd.Value);
 
-      if (p.Limits.Count == 0) p.Error = "利用枠の情報がありません";
+      if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報がありません", "No usage data");
     } catch (Exception ex) {
       p.Error = ex.Message;
     }
@@ -452,17 +471,17 @@ static class CodexApi {
     var p = new Provider { Key = "codex", Name = "Codex" };
     try {
       string res = Call();
-      if (res == null) { p.Error = "codex app-server から応答がありません"; return p; }
+      if (res == null) { p.Error = S.T("codex app-server から応答がありません", "No response from codex app-server"); return p; }
 
       string rl = Json.Object(res, "rateLimits");
-      if (rl == null) { p.Error = "利用枠の情報がありません"; return p; }
+      if (rl == null) { p.Error = S.T("利用枠の情報がありません", "No usage data"); return p; }
 
       p.Note = Json.Str(rl, "planType");
       Add(p, Json.Object(rl, "primary"));
       Add(p, Json.Object(rl, "secondary"));
       p.DataTime = DateTime.Now;
 
-      if (p.Limits.Count == 0) p.Error = "利用枠の情報が空でした";
+      if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
     } catch (Exception ex) {
       p.Error = ex.Message;
     }
@@ -478,7 +497,7 @@ static class CodexApi {
     l.Severity = l.Percent >= 90 ? "critical" : "normal";
 
     double? win = Json.Num(obj, "windowDurationMins");
-    l.Label = win.HasValue ? Json.WindowLabel(win.Value) : "利用枠";
+    l.Label = win.HasValue ? Json.WindowLabel(win.Value) : S.T("利用枠", "Usage");
 
     double? reset = Json.Num(obj, "resetsAt");
     if (reset.HasValue) l.ResetsAt = Json.FromUnix(reset.Value);
@@ -505,7 +524,7 @@ static class CodexApi {
       proc = Process.Start(psi);
       proc.StandardInput.WriteLine(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":" +
-        "{\"name\":\"QuotaGauge\",\"title\":\"QuotaGauge\",\"version\":\"2.1.1\"}}}");
+        "{\"name\":\"QuotaGauge\",\"title\":\"QuotaGauge\",\"version\":\"2.2.0\"}}}");
       proc.StandardInput.Flush();
       proc.StandardInput.WriteLine(
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
@@ -608,7 +627,7 @@ class QuotaPanel : Form {
     DoubleBuffered = true;
 
     refreshBtn = new Button();
-    refreshBtn.Text = "更新";
+    refreshBtn.Text = S.T("更新", "Refresh");
     refreshBtn.FlatStyle = FlatStyle.Flat;
     refreshBtn.FlatAppearance.BorderColor = Palette.Border;
     refreshBtn.FlatAppearance.BorderSize = 1;
@@ -635,7 +654,7 @@ class QuotaPanel : Form {
   // 押しても何も起きないように見えると、更新できたのか分からない
   public void SetBusy(bool busy) {
     refreshBtn.Enabled = !busy;
-    refreshBtn.Text = busy ? "更新中" : "更新";
+    refreshBtn.Text = busy ? S.T("更新中", "Refreshing") : S.T("更新", "Refresh");
     refreshBtn.Refresh();
   }
 
@@ -667,13 +686,13 @@ class QuotaPanel : Form {
       g.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
 
     using (var b = new SolidBrush(Palette.Text))
-      g.DrawString("利用枠", fTitle, b, 16, 14);
+      g.DrawString(S.T("利用枠", "Usage"), fTitle, b, 16, 14);
 
     int y = 44;
 
     if (snap == null) {
       using (var b = new SolidBrush(Palette.SubText))
-        g.DrawString("読み込み中…", fLabel, b, 16, y + 8);
+        g.DrawString(S.T("読み込み中…", "Loading…"), fLabel, b, 16, y + 8);
     } else {
       foreach (var pv in snap.Providers) {
         // 値が古いときは見出しの色を変えて、他所の表示とのズレに気づけるようにする
@@ -683,7 +702,7 @@ class QuotaPanel : Form {
 
         if (pv.Limits.Count == 0) {
           using (var b = new SolidBrush(Palette.SubText))
-            g.DrawString(pv.Error ?? "情報なし", fSub, b, 16, y);
+            g.DrawString(pv.Error ?? S.T("情報なし", "No data"), fSub, b, 16, y);
           y += RowH;
           continue;
         }
@@ -692,7 +711,7 @@ class QuotaPanel : Form {
     }
 
     using (var b = new SolidBrush(Palette.SubText))
-      g.DrawString(snap == null ? "" : "最終取得 " + snap.FetchedAt.ToString("HH:mm:ss"),
+      g.DrawString(snap == null ? "" : S.T("最終取得 ", "Updated ") + snap.FetchedAt.ToString("HH:mm:ss"),
                    fSub, b, 16, Height - 30);
   }
 
@@ -714,9 +733,9 @@ class QuotaPanel : Form {
         g.FillRectangle(b, 16, barY, fill, barH);
 
     // 使った量（右上の数字）と、まだ使える量を両方見せる
-    string sub = "残り " + Math.Max(0, 100 - l.Percent) + "%";
+    string sub = string.Format(S.T("残り {0}%", "{0}% left"), Math.Max(0, 100 - l.Percent));
     if (l.ResetIsUsable)
-      sub += " ・ " + l.Remaining + "（" + l.ResetsAt.Value.ToString("M/d HH:mm") + "）";
+      sub += S.T(" ・ ", " · ") + l.Remaining + S.T("（", " (") + l.ResetsAt.Value.ToString("M/d HH:mm") + S.T("）", ")");
     using (var b = new SolidBrush(Palette.SubText))
       g.DrawString(sub, fSub, b, 16, barY + 11);
   }
@@ -745,7 +764,7 @@ class TrayApp : ApplicationContext {
     // 取得が終わるまでの一瞬と、描画に失敗したときの拠り所。exe に埋めたリングを使う
     try { ni.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
     catch { ni.Icon = SystemIcons.Application; }
-    ni.Text = "利用枠ゲージ";
+    ni.Text = S.T("利用枠ゲージ", "QuotaGauge");
     ni.ContextMenuStrip = menu;
     ni.Visible = true;
     ni.MouseClick += OnClick;
@@ -784,7 +803,7 @@ class TrayApp : ApplicationContext {
       try { s = Usage.FetchAll(); }
       catch (Exception ex) {
         s = new Snapshot { FetchedAt = DateTime.Now };
-        Log.Write("取得中の例外: " + ex.Message);
+        Log.Write("Fetch failed: " + ex.Message);
       }
 
       MethodInvoker apply = delegate {
@@ -858,7 +877,7 @@ class TrayApp : ApplicationContext {
           if (sb.Length > 0) sb.Append("\r\n");
           sb.Append(p.Name + " " + worst + "%");
         }
-      string tip = sb.Length == 0 ? "利用枠ゲージ" : sb.ToString();
+      string tip = sb.Length == 0 ? S.T("利用枠ゲージ", "QuotaGauge") : sb.ToString();
       ni.Text = tip.Length > 62 ? tip.Substring(0, 62) : tip;
     } catch (Exception ex) { Log.Write("UpdateIcon: " + ex.Message); }
   }
@@ -872,15 +891,15 @@ class TrayApp : ApplicationContext {
   void BuildMenu(object sender, System.ComponentModel.CancelEventArgs e) {
     menu.Items.Clear();
 
-    var open = new ToolStripMenuItem("利用枠を見る");
+    var open = new ToolStripMenuItem(S.T("利用枠を見る", "Show usage"));
     open.Click += delegate { panel.ShowAt(snap, Cursor.Position); };
     menu.Items.Add(open);
 
-    var reload = new ToolStripMenuItem("今すぐ更新");
+    var reload = new ToolStripMenuItem(S.T("今すぐ更新", "Refresh now"));
     reload.Click += delegate { Reload(true); };
     menu.Items.Add(reload);
 
-    var log = new ToolStripMenuItem("ログを見る");
+    var log = new ToolStripMenuItem(S.T("ログを見る", "View log"));
     log.Enabled = File.Exists(Log.Path);
     log.Click += delegate {
       // パスにスペースが入ると引数が割れるので必ず括る
@@ -891,26 +910,26 @@ class TrayApp : ApplicationContext {
     menu.Items.Add(new ToolStripSeparator());
 
     // 主に使うツールは人によって違うので、アイコンが映す対象を選べるようにする
-    var iconSrc = new ToolStripMenuItem("アイコンに出す対象");
-    AddIconSource(iconSrc, "both",   "厳しい方");
+    var iconSrc = new ToolStripMenuItem(S.T("アイコンに出す対象", "Icon follows"));
+    AddIconSource(iconSrc, "both",   S.T("厳しい方", "Whichever is tighter"));
     AddIconSource(iconSrc, "claude", "Claude Code");
     AddIconSource(iconSrc, "codex",  "Codex");
     menu.Items.Add(iconSrc);
 
-    var claudeSrc = new ToolStripMenuItem("Claude の取得元");
-    AddClaudeSource(claudeSrc, "cli",        "Claude Code に聞く（既定）");
-    AddClaudeSource(claudeSrc, "endpoint",   "同じ問い合わせ先を直接（速い）");
-    AddClaudeSource(claudeSrc, "statusline", "ステータスライン経由（古い値になる）");
+    var claudeSrc = new ToolStripMenuItem(S.T("Claude の取得元", "Claude data source"));
+    AddClaudeSource(claudeSrc, "cli",        S.T("Claude Code に聞く（既定）", "Ask Claude Code (default)"));
+    AddClaudeSource(claudeSrc, "endpoint",   S.T("同じ問い合わせ先を直接（速い）", "Call the endpoint directly (faster)"));
+    AddClaudeSource(claudeSrc, "statusline", S.T("ステータスライン経由（古い値になる）", "Via the status line (goes stale)"));
     menu.Items.Add(claudeSrc);
 
-    var startup = new ToolStripMenuItem("Windows起動時に開始");
+    var startup = new ToolStripMenuItem(S.T("Windows起動時に開始", "Start with Windows"));
     startup.Checked = RunAtStartup;
     startup.Click += delegate { RunAtStartup = !RunAtStartup; };
     menu.Items.Add(startup);
 
     menu.Items.Add(new ToolStripSeparator());
 
-    var quit = new ToolStripMenuItem("終了");
+    var quit = new ToolStripMenuItem(S.T("終了", "Quit"));
     quit.Click += delegate {
       ni.Visible = false;
       ni.Dispose();
@@ -1004,14 +1023,17 @@ static class Config {
     } catch { return fallback; }
   }
 
-  static void Write(string iconSource, string claudeSource) {
+  static void Write(string iconSource, string claudeSource) { Write(iconSource, claudeSource, Language); }
+
+  static void Write(string iconSource, string claudeSource, string language) {
     try {
       File.WriteAllText(Path,
         "{\r\n" +
         "  \"_comment\": \"iconSource: which provider the tray icon reflects (both|claude|codex). " +
-        "claudeSource: where Claude numbers come from (cli|endpoint|statusline).\",\r\n" +
+        "claudeSource: where Claude numbers come from (cli|endpoint|statusline). language: auto|ja|en (auto follows Windows).\",\r\n" +
         "  \"iconSource\": \"" + iconSource + "\",\r\n" +
-        "  \"claudeSource\": \"" + claudeSource + "\"\r\n" +
+        "  \"claudeSource\": \"" + claudeSource + "\",\r\n" +
+        "  \"language\": \"" + language + "\"\r\n" +
         "}\r\n", new UTF8Encoding(false));
     } catch { }
   }
@@ -1030,6 +1052,11 @@ static class Config {
   public static string ClaudeSource {
     get { return Read("claudeSource", "cli"); }
     set { Write(IconSource, value); }
+  }
+
+  // 表示言語。"auto"（既定）は Windows の表示言語に従う。"ja" / "en" で固定できる
+  public static string Language {
+    get { return Read("language", "auto"); }
   }
 }
 
@@ -1063,10 +1090,10 @@ static class Program {
       // 例外はダイアログではなくログへ。常駐ツールが前面に出て作業を止めないようにする
       Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
       Application.ThreadException += delegate (object s, ThreadExceptionEventArgs ev) {
-        Log.Write("例外: " + ev.Exception);
+        Log.Write("Exception: " + ev.Exception);
       };
       AppDomain.CurrentDomain.UnhandledException += delegate (object s, UnhandledExceptionEventArgs ev) {
-        Log.Write("未処理例外: " + ev.ExceptionObject);
+        Log.Write("Unhandled exception: " + ev.ExceptionObject);
       };
 
       Application.EnableVisualStyles();

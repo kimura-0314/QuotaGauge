@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.2.0
+
+### Added
+
+- **The interface is available in English.** It follows your Windows display language: Japanese on
+  a Japanese system, English everywhere else. Set `"language"` in `config.json` to `ja` or `en` to
+  pin it. Until now everything the app showed — the panel, the tray menu, every error message —
+  was Japanese only, which made the English README a promise the app did not keep.
+
+  The two languages are held side by side at each call site rather than in a separate table, so one
+  cannot quietly fall behind the other.
+
+### Changed
+
+- The assembly title and description are now the product name and an English sentence, so the exe
+  identifies itself the same way in any locale.
+
 ## 2.1.1
 
 ### Fixed

@@ -24,7 +24,7 @@ Made by kimura — [X](https://x.com/kimura_0314) · [note](https://note.com/coz
 
 The panel:
 
-![Usage panel](docs/panel.png)
+![Usage panel](docs/panel-en.png)
 
 It refreshes every 3 minutes. Alongside the 5-hour and weekly windows you also get
 **per-model weekly windows** and your plan name.
@@ -132,6 +132,17 @@ except Exception:
     pass
 ```
 
+### Language
+
+The interface follows your Windows display language: Japanese on a Japanese system, English
+everywhere else. To pin it either way, set `language` in `config.json`:
+
+```json
+{ "language": "en" }
+```
+
+Accepted values are `auto` (the default), `ja` and `en`.
+
 ### Where settings and logs live
 
 `config.json` and `quotagauge.log` are written **next to the exe**, so you can carry the whole
@@ -142,13 +153,11 @@ The log is **only written when something fails**. No new lines means fetching is
 
 ## When something is wrong
 
-The interface is in Japanese, so the messages below are quoted as they appear.
-
 | Symptom | |
 |---|---|
-| `claude から応答がありません` | `claude` is not on your PATH, or you are not signed in. Check that `claude --version` runs |
-| `codex app-server から応答がありません` | Same for `codex`. Check that `codex app-server` runs |
-| `ログインし直してください（HTTP 401）` | Only when using source 2. Sign in to Claude Code again — source 1 never hits this. While failures continue the interval backs off 3min, 6, 12, up to 60. "Refresh now" retries immediately |
+| `No response from claude` | `claude` is not on your PATH, or you are not signed in. Check that `claude --version` runs |
+| `No response from codex app-server` | Same for `codex`. Check that `codex app-server` runs |
+| `Sign in to Claude Code again (token expired, HTTP 401)` | Only when using source 2. Source 1 never hits this. While failures continue the interval backs off 3min, 6, 12, up to 60. "Refresh now" retries immediately |
 | Claude figures look stale | You are on source 3. Switch back to 1 from the right-click menu |
 | No icon in the tray | Windows 11 hides new icons under `^`. Drag it onto the taskbar |
 

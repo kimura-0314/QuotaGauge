@@ -132,6 +132,17 @@ except Exception:
     pass
 ```
 
+### 表示言語
+
+Windows の表示言語に従う。日本語環境なら日本語、それ以外は英語になる。
+固定したいときは `config.json` の `language` を書き換える：
+
+```json
+{ "language": "en" }
+```
+
+値は `auto`（既定）／`ja`／`en`。
+
 ### 設定とログの置き場所
 
 `config.json` と `quotagauge.log` は **exe と同じフォルダ**に作る（USBメモリなどに入れて持ち運べるように）。
