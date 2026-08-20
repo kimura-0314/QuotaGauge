@@ -170,6 +170,20 @@ tray icon uses, so the two never drift apart.
   shows up
 - No administrator rights
 
+## Acknowledgements
+
+QuotaGauge exists because of **[CodexBar](https://github.com/steipete/CodexBar)** by
+[@steipete](https://github.com/steipete) (MIT). That is the tool that showed me a quota readout
+belongs in the menu bar, and it covers far more ground than this does — 57+ providers, incident
+badges, a real settings surface.
+
+CodexBar runs on macOS and Linux. I am on Windows, so I could not use it. QuotaGauge is what I
+built instead: a much smaller thing, written in C# rather than Swift, sharing no code with it. The
+default data path ended up different too — QuotaGauge asks `claude` for `get_usage` instead of
+calling the API itself.
+
+If you are on a Mac, install CodexBar. It does more than this ever will.
+
 ## Disclaimer
 
 This project is unofficial and is not affiliated with Anthropic or OpenAI.

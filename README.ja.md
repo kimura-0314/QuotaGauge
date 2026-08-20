@@ -168,6 +168,18 @@ Windows 同梱の `csc.exe` を使うので、Visual Studio も .NET SDK も要�
   （片方だけでも、入っている方は表示される）
 - 管理者権限は不要
 
+## 謝辞
+
+QuotaGauge は **[CodexBar](https://github.com/steipete/CodexBar)**（[@steipete](https://github.com/steipete) 作・MIT）が
+あったから作った。利用枠はメニューバーに出すものだ、と教えてくれたのがこれで、
+対応プロバイダ57以上・インシデント表示・設定画面と、こちらよりずっと広い。
+
+CodexBar が動くのは macOS と Linux。自分は Windows なので使えなかった。
+QuotaGauge はその代わりに作ったもので、ずっと小さく、Swift ではなく C# で書いていて、コードは共有していない。
+既定の取得方法も結果的に別のものになった（API を自分で叩くのではなく `claude` に `get_usage` を聞く）。
+
+Mac なら CodexBar を入れたほうがいい。できることはあちらの方がずっと多い。
+
 ## 免責
 
 このプロジェクトは非公式で、Anthropic および OpenAI とは関係がありません。
