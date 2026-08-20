@@ -3,10 +3,14 @@
 //   左クリック … 使用率のパネルを開く
 //   右クリック … 更新 / ログ / 起動時に開始 / 終了
 //
-// どちらも公式に提供されている経路だけを使う。
-//   Claude Code … ステータスラインへ公式に渡される rate_limits を、ローカルのキャッシュ経由で読む
+// 取得元
+//   Claude Code … 既定は `claude` を起動して control_request {subtype:"get_usage"} を投げる。
+//                 Claude Code 自身が OAuth を更新して取ってくるので、こちらは認証情報にも
+//                 ネットワークにも触れない。モデルは呼ばれないので課金もされない。
+//                 右クリックから、直接叩く経路／ステータスライン経由にも切り替えられる
 //   Codex       … codex app-server の JSON-RPC `account/rateLimits/read` を呼ぶ
-// 認証情報には一切触れないし、外部へ何も送信しない。
+//
+// 取得した値はローカルに表示するだけで、第三者のサーバーへは何も送らない。
 //
 // ビルド: build.ps1
 
@@ -30,8 +34,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Claude Code と Codex の利用枠を通知領域に表示する")]
 [assembly: System.Reflection.AssemblyCompany("kimura")]
 [assembly: System.Reflection.AssemblyCopyright("MIT License")]
-[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.1.0.0")]
 
 namespace QuotaGauge {
 
@@ -44,7 +48,7 @@ class Limit {
 
   public bool IsCritical { get { return Severity == "critical" || Percent >= 90; } }
 
-  // リセット時刻が過去を指していることがある（提供側の値がそうなっている）。
+  // 値が古いと（statusline のキャッシュなど）リセット時刻が過去を指す。
   // その場合は残り時間を出さない。おかしな値を自信ありげに見せない方がいい
   public bool ResetIsUsable {
     get { return ResetsAt.HasValue && (ResetsAt.Value - DateTime.Now).TotalSeconds > 0; }
@@ -208,18 +212,139 @@ static class Json {
 }
 
 // ------------------------------------------------------------------ Claude Code
-// ステータスラインへ公式に渡される rate_limits を、statusline スクリプトが書いたキャッシュから読む。
-// 認証情報もネットワークアクセスも使わない。
+// 取得元は3つ。どれを使うかは Config.ClaudeSource。
+//   cli（既定）  … Claude Code 自身に聞く。認証情報にもネットワークにも触れず、値は本体と同じ
+//   endpoint     … 同じ問い合わせ先を直接叩く。速いが、認証情報を読みネットワークへ出る
+//   statusline   … statusline スクリプトが書いたキャッシュを読む。5時間枠と週次だけ
 static class ClaudeApi {
   public static Provider Fetch() {
-    return Config.ClaudeSource == "statusline" ? FromStatusLine() : FromEndpoint();
+    switch (Config.ClaudeSource) {
+      case "statusline": return FromStatusLine();
+      case "endpoint":   return FromEndpoint();
+      default:           return FromCli();
+    }
   }
 
-  // --- 既定：Claude Code 自身が使っているのと同じ問い合わせ先から直接読む -----------
-  // 5時間枠・週次に加えてモデル別の枠まで返り、リセット時刻も正確。
-  // ただし公開されたインターフェースではない（README の注意書きを参照）
+  // --- 既定：Claude Code 自身に聞く ---------------------------------------------
+  // `claude` を stream-json モードで起動して control_request {subtype:"get_usage"} を1行流す。
+  // Claude Code が OAuth を更新したうえで自分の利用枠を取ってくるので、
+  // こちらは認証情報にもネットワークにも触らない。モデルは呼ばれないので課金もされない。
+  // Codex を app-server 越しに聞いているのと同じ形。
+  static Provider FromCli() {
+    var p = new Provider { Key = "claude", Name = "Claude Code" };
+    try {
+      string res = CallClaude();
+      if (res == null) { p.Error = "claude から応答がありません（PATH とログイン状態を確認）"; return p; }
+      if (Json.Str(res, "subtype") == "error") {
+        p.Error = Json.Str(res, "error") ?? "利用枠を取得できませんでした";
+        return p;
+      }
+
+      p.Note = Json.Str(res, "subscription_type");
+      ParseLimits(p, res);
+      p.DataTime = DateTime.Now;
+      if (p.Limits.Count == 0) p.Error = "利用枠の情報が空でした";
+    } catch (Exception ex) {
+      p.Error = ex.Message;
+    }
+    return p;
+  }
+
+  static string CallClaude() {
+    var psi = new ProcessStartInfo("claude",
+      "-p --input-format stream-json --output-format stream-json --verbose " +
+      // MCP の読み込みが起動時間の半分を占めるので落とす。hook も要らない
+      "--strict-mcp-config --mcp-config \"{\\\"mcpServers\\\":{}}\" --settings \"{\\\"hooks\\\":{}}\"");
+    psi.WorkingDirectory = Paths.WorkDir;
+    psi.UseShellExecute = false;
+    psi.RedirectStandardInput = true;
+    psi.RedirectStandardOutput = true;
+    psi.RedirectStandardError = true;
+    psi.CreateNoWindow = true;
+    psi.StandardOutputEncoding = Encoding.UTF8;
+    // telegram プラグインが入っている環境で、常駐中のポーラーを止めさせない
+    psi.EnvironmentVariables["TELEGRAM_STATE_DIR"] =
+      Path.Combine(Path.GetTempPath(), "quotagauge-no-telegram");
+
+    Process proc = null;
+    try {
+      proc = Process.Start(psi);
+      proc.StandardInput.WriteLine(
+        "{\"type\":\"control_request\",\"request_id\":\"1\",\"request\":{\"subtype\":\"get_usage\"}}");
+      proc.StandardInput.Flush();
+      proc.StandardInput.Close();
+
+      string found = null;
+      var reader = new Thread(delegate () {
+        try {
+          string line;
+          while ((line = proc.StandardOutput.ReadLine()) != null)
+            if (line.Contains("\"control_response\"")) { found = line; break; }
+        } catch { }
+      });
+      reader.IsBackground = true;
+      reader.Start();
+      // 実測でおよそ8秒。遅い環境でも取りこぼさないよう余裕を持って待つ
+      if (!reader.Join(60000)) { try { proc.Kill(); } catch { } }
+      return found;
+    } finally {
+      if (proc != null) {
+        try { if (!proc.WaitForExit(3000)) proc.Kill(); } catch { }
+        try { proc.Dispose(); } catch { }
+      }
+    }
+  }
+
+  // limits[] は cli と endpoint で同じ構造。両方から使う
+  static void ParseLimits(Provider p, string body) {
+    foreach (var obj in Json.Objects(body, "limits")) {
+      var l = new Limit();
+      l.Percent  = (int)Math.Round(Json.Num(obj, "percent") ?? 0);
+      l.Severity = Json.Str(obj, "severity") ?? "normal";
+      l.ResetsAt = Json.Iso(obj, "resets_at");
+
+      string kind = Json.Str(obj, "kind") ?? "";
+      var scope = Regex.Match(obj, "\"scope\"\\s*:\\s*\\{.*?\"display_name\"\\s*:\\s*\"([^\"]+)\"",
+                              RegexOptions.Singleline);
+      if (scope.Success)             l.Label = "週次（" + scope.Groups[1].Value + "）";
+      else if (kind == "session")    l.Label = "5時間枠";
+      else if (kind == "weekly_all") l.Label = "週次（全体）";
+      else                           l.Label = kind;
+
+      p.Limits.Add(l);
+    }
+  }
+
+  // --- もう一方：同じ問い合わせ先を自分で直接叩く -------------------------------
+  // 速いが、認証情報を読みネットワークへ出る。トークンを更新できないので期限切れで 401 になる。
+  // 公開されたインターフェースでもない（README の注意書きを参照）
   const string Url = "https://api.anthropic.com/api/oauth/usage";
   const string Beta = "oauth-2025-04-20";
+
+  // トークンが切れている（401）状態で3分ごとに叩き続けると、そのまま 429 を踏み続ける。
+  // 失敗が続くあいだは間隔を伸ばす。成功したら元に戻す
+  static int failCount;
+  static DateTime retryAfter = DateTime.MinValue;
+  static string lastError = "";
+
+  // 「今すぐ更新」を押されたときは、待機中でもすぐ試す
+  public static void ResetBackoff() {
+    failCount = 0;
+    retryAfter = DateTime.MinValue;
+  }
+
+  // 3分 → 6 → 12 → 24 → 48 → 60分（上限）
+  static void Backoff(string err) {
+    failCount++;
+    int mins = (int)Math.Min(60, 3 * Math.Pow(2, Math.Min(failCount - 1, 5)));
+    retryAfter = DateTime.Now.AddMinutes(mins);
+    lastError = err;
+  }
+
+  static string WaitLabel(TimeSpan t) {
+    int m = (int)Math.Ceiling(t.TotalMinutes);
+    return m >= 60 ? (m / 60) + "時間" : m + "分";
+  }
 
   static string CredentialsPath {
     get {
@@ -230,6 +355,12 @@ static class ClaudeApi {
 
   static Provider FromEndpoint() {
     var p = new Provider { Key = "claude", Name = "Claude Code" };
+
+    if (DateTime.Now < retryAfter) {
+      p.Error = lastError + "（" + WaitLabel(retryAfter - DateTime.Now) + "後に再試行）";
+      return p;
+    }
+
     try {
       string cred = File.ReadAllText(CredentialsPath, Encoding.UTF8);
       var tok = Regex.Match(cred, "\"accessToken\"\\s*:\\s*\"([^\"]+)\"");
@@ -248,36 +379,29 @@ static class ClaudeApi {
       using (var sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
         body = sr.ReadToEnd();
 
-      foreach (var obj in Json.Objects(body, "limits")) {
-        var l = new Limit();
-        l.Percent  = (int)Math.Round(Json.Num(obj, "percent") ?? 0);
-        l.Severity = Json.Str(obj, "severity") ?? "normal";
-        l.ResetsAt = Json.Iso(obj, "resets_at");
-
-        string kind = Json.Str(obj, "kind") ?? "";
-        var scope = Regex.Match(obj, "\"scope\"\\s*:\\s*\\{.*?\"display_name\"\\s*:\\s*\"([^\"]+)\"",
-                                RegexOptions.Singleline);
-        if (scope.Success)             l.Label = "週次（" + scope.Groups[1].Value + "）";
-        else if (kind == "session")    l.Label = "5時間枠";
-        else if (kind == "weekly_all") l.Label = "週次（全体）";
-        else                           l.Label = kind;
-
-        p.Limits.Add(l);
-      }
+      ParseLimits(p, body);
       p.DataTime = DateTime.Now;
       if (p.Limits.Count == 0) p.Error = "利用枠の情報が空でした";
+      ResetBackoff();
     } catch (WebException wex) {
       var r = wex.Response as HttpWebResponse;
-      p.Error = r != null ? "取得できません (HTTP " + (int)r.StatusCode + ")" : "取得できません: " + wex.Message;
+      int code = r != null ? (int)r.StatusCode : 0;
+      // 何が起きているか分からないと直しようがないので、コードごとに次の一手を書く
+      if (code == 401)      p.Error = "ログインし直してください（トークンの期限切れ・HTTP 401）";
+      else if (code == 429) p.Error = "問い合わせが多すぎます（HTTP 429）";
+      else if (code != 0)   p.Error = "取得できません (HTTP " + code + ")";
+      else                  p.Error = "取得できません: " + wex.Message;
+      Backoff(p.Error);
     } catch (Exception ex) {
       p.Error = ex.Message;
+      Backoff(p.Error);
     }
     return p;
   }
 
   // --- もう一方：ステータスライン経由 ------------------------------------------
-  // 公開された経路だけで動くが、渡ってくる値の精度は上に劣る
-  // （5時間枠のリセット時刻が過去を指すことがある／モデル別の枠は含まれない）
+  // 渡ってくるのは 5時間枠と週次だけ（モデル別の枠は含まれない）。
+  // ステータスラインが呼ばれた時点の値なので、放置すると古くなる
   public static string CachePath {
     get {
       return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -364,6 +488,7 @@ static class CodexApi {
 
   static string Call() {
     var psi = new ProcessStartInfo("cmd.exe", "/c codex app-server");
+    psi.WorkingDirectory = Paths.WorkDir;
     psi.UseShellExecute = false;
     psi.RedirectStandardInput = true;
     psi.RedirectStandardOutput = true;
@@ -380,19 +505,29 @@ static class CodexApi {
       proc = Process.Start(psi);
       proc.StandardInput.WriteLine(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":" +
-        "{\"name\":\"QuotaGauge\",\"title\":\"QuotaGauge\",\"version\":\"2.0.0\"}}}");
+        "{\"name\":\"QuotaGauge\",\"title\":\"QuotaGauge\",\"version\":\"2.1.0\"}}}");
       proc.StandardInput.Flush();
       proc.StandardInput.WriteLine(
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
       proc.StandardInput.Flush();
 
-      // 通知が混ざって流れてくるので、目的の id の行が来るまで読み進める
-      for (int i = 0; i < 200; i++) {
-        string line = proc.StandardOutput.ReadLine();
-        if (line == null) break;
-        if (line.Contains("\"id\":2")) return line;
-      }
-      return null;
+      // 通知が混ざって流れてくるので、目的の id の行が来るまで読み進める。
+      // 応答が返らないまま ReadLine で止まると、3分ごとに codex のプロセスが積み上がる。
+      // 読みは別スレッドに任せて、待つのは15秒まで
+      string found = null;
+      var reader = new Thread(delegate () {
+        try {
+          for (int i = 0; i < 200; i++) {
+            string line = proc.StandardOutput.ReadLine();
+            if (line == null) break;
+            if (line.Contains("\"id\":2")) { found = line; break; }
+          }
+        } catch { }
+      });
+      reader.IsBackground = true;
+      reader.Start();
+      if (!reader.Join(15000)) { try { proc.Kill(); } catch { } }
+      return found;
     } finally {
       if (proc != null) {
         try { proc.StandardInput.Close(); } catch { }
@@ -603,7 +738,7 @@ class TrayApp : ApplicationContext {
     ni.MouseClick += OnClick;
 
     panel = new QuotaPanel();
-    panel.RefreshRequested += delegate { Reload(); };
+    panel.RefreshRequested += delegate { Reload(true); };
     // 別スレッドの取得結果をUIへ戻すため、表示前にウィンドウハンドルを作っておく
     { IntPtr dummy = panel.Handle; }
 
@@ -616,7 +751,19 @@ class TrayApp : ApplicationContext {
     Reload();
   }
 
-  void Reload() {
+  int reloading;                                          // 0=待機 1=取得中
+  readonly Dictionary<string, string> lastLogged = new Dictionary<string, string>();
+
+  void Reload() { Reload(false); }
+
+  // manual=true は「今すぐ更新」。待機中のバックオフを無視してすぐ試す
+  void Reload(bool manual) {
+    if (manual) ClaudeApi.ResetBackoff();
+
+    // 前の取得がまだ終わっていないなら重ねない。
+    // codex app-server が応答しないとき、3分ごとにスレッドとプロセスが積み上がってしまう
+    if (Interlocked.CompareExchange(ref reloading, 1, 0) != 0) return;
+
     try { panel.SetBusy(true); } catch { }
 
     var t = new Thread(delegate () {
@@ -631,16 +778,25 @@ class TrayApp : ApplicationContext {
         snap = s;
         try { panel.UpdateSnapshot(s); panel.SetBusy(false); } catch { }
         UpdateIcon();
-        foreach (var p in s.Providers)
-          if (p.Error != null) Log.Write(p.Name + ": " + p.Error);
+        foreach (var p in s.Providers) LogIfNew(p);
       };
       try {
         if (panel.IsHandleCreated) panel.BeginInvoke(apply);
         else apply();
       } catch (Exception ex) { Log.Write("Reload: " + ex.Message); }
+      finally { Interlocked.Exchange(ref reloading, 0); }
     });
     t.IsBackground = true;
     t.Start();
+  }
+
+  // 同じエラーが3分ごとに並ぶとログが読めなくなる。内容が変わったときだけ書く
+  void LogIfNew(Provider p) {
+    string cur = p.Error ?? "";
+    string prev;
+    if (lastLogged.TryGetValue(p.Key, out prev) && prev == cur) return;
+    lastLogged[p.Key] = cur;
+    if (cur.Length > 0) Log.Write(p.Name + ": " + cur);
   }
 
   // 使用率をリング（円弧）で描く。32pxに数字を入れても読めないので、量は角度で示す
@@ -708,13 +864,14 @@ class TrayApp : ApplicationContext {
     menu.Items.Add(open);
 
     var reload = new ToolStripMenuItem("今すぐ更新");
-    reload.Click += delegate { Reload(); };
+    reload.Click += delegate { Reload(true); };
     menu.Items.Add(reload);
 
     var log = new ToolStripMenuItem("ログを見る");
     log.Enabled = File.Exists(Log.Path);
     log.Click += delegate {
-      try { Process.Start("notepad.exe", Log.Path); } catch { }
+      // パスにスペースが入ると引数が割れるので必ず括る
+      try { Process.Start("notepad.exe", "\"" + Log.Path + "\""); } catch { }
     };
     menu.Items.Add(log);
 
@@ -728,8 +885,9 @@ class TrayApp : ApplicationContext {
     menu.Items.Add(iconSrc);
 
     var claudeSrc = new ToolStripMenuItem("Claude の取得元");
-    AddClaudeSource(claudeSrc, "endpoint",   "Claude Code と同じ経路（正確）");
-    AddClaudeSource(claudeSrc, "statusline", "ステータスライン経由（公開経路のみ）");
+    AddClaudeSource(claudeSrc, "cli",        "Claude Code に聞く（既定）");
+    AddClaudeSource(claudeSrc, "endpoint",   "同じ問い合わせ先を直接（速い）");
+    AddClaudeSource(claudeSrc, "statusline", "ステータスライン経由（古い値になる）");
     menu.Items.Add(claudeSrc);
 
     var startup = new ToolStripMenuItem("Windows起動時に開始");
@@ -758,7 +916,7 @@ class TrayApp : ApplicationContext {
   void AddClaudeSource(ToolStripMenuItem root, string key, string label) {
     var item = new ToolStripMenuItem(label);
     item.Checked = (Config.ClaudeSource == key);
-    item.Click += delegate { Config.ClaudeSource = key; Reload(); };
+    item.Click += delegate { Config.ClaudeSource = key; Reload(true); };
     root.DropDownItems.Add(item);
   }
 
@@ -777,12 +935,51 @@ class TrayApp : ApplicationContext {
   }
 }
 
+// 設定とログの置き場所。持ち運べるように、まずは exe と同じフォルダを使う。
+// Program Files のように書き込めない場所へ置かれたときだけ %LOCALAPPDATA% へ逃がす
+static class Paths {
+  static string dir;
+  static string work;
+
+  // 子プロセス（claude / codex）を起こす場所。
+  // 指定しないと exe を置いたフォルダがカレントになり、そこに置かれた同名の実行ファイルを
+  // 先に拾ってしまう（cmd も CreateProcess もカレントを検索順に含む）。専用の空き場所へ固定する
+  public static string WorkDir {
+    get {
+      if (work != null) return work;
+      work = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "quotagauge-work");
+      try { Directory.CreateDirectory(work); } catch { work = System.IO.Path.GetTempPath(); }
+      return work;
+    }
+  }
+
+  public static string DataDir {
+    get {
+      if (dir != null) return dir;
+
+      string beside = System.IO.Path.GetDirectoryName(Application.ExecutablePath);
+      if (IsWritable(beside)) return dir = beside;
+
+      string fallback = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "QuotaGauge");
+      try { Directory.CreateDirectory(fallback); } catch { }
+      return dir = fallback;
+    }
+  }
+
+  static bool IsWritable(string d) {
+    try {
+      string probe = System.IO.Path.Combine(d, ".quotagauge-write-test");
+      File.WriteAllText(probe, "");
+      File.Delete(probe);
+      return true;
+    } catch { return false; }
+  }
+}
+
 static class Config {
   public static string Path {
-    get {
-      return System.IO.Path.Combine(
-        System.IO.Path.GetDirectoryName(Application.ExecutablePath), "config.json");
-    }
+    get { return System.IO.Path.Combine(Paths.DataDir, "config.json"); }
   }
 
   static string Read(string key, string fallback) {
@@ -799,7 +996,7 @@ static class Config {
       File.WriteAllText(Path,
         "{\r\n" +
         "  \"_comment\": \"iconSource: which provider the tray icon reflects (both|claude|codex). " +
-        "claudeSource: where Claude numbers come from (endpoint|statusline).\",\r\n" +
+        "claudeSource: where Claude numbers come from (cli|endpoint|statusline).\",\r\n" +
         "  \"iconSource\": \"" + iconSource + "\",\r\n" +
         "  \"claudeSource\": \"" + claudeSource + "\"\r\n" +
         "}\r\n", new UTF8Encoding(false));
@@ -814,20 +1011,18 @@ static class Config {
   }
 
   // Claude の数値をどこから取るか。
-  //   "endpoint"（既定）  … Claude Code と同じ問い合わせ先。モデル別の枠まで出て、リセット時刻も正確
-  //   "statusline"        … 公開された経路だけを使う。値の精度は落ちる
+  //   "cli"（既定）  … Claude Code 自身に聞く。認証情報にもネットワークにも触れず、値は本体と同じ
+  //   "endpoint"     … 同じ問い合わせ先を直接叩く。速いが認証情報を読む
+  //   "statusline"   … statusline のキャッシュを読む。5時間枠と週次だけ
   public static string ClaudeSource {
-    get { return Read("claudeSource", "endpoint"); }
+    get { return Read("claudeSource", "cli"); }
     set { Write(IconSource, value); }
   }
 }
 
 static class Log {
   public static string Path {
-    get {
-      return System.IO.Path.Combine(
-        System.IO.Path.GetDirectoryName(Application.ExecutablePath), "quotagauge.log");
-    }
+    get { return System.IO.Path.Combine(Paths.DataDir, "quotagauge.log"); }
   }
 
   public static void Write(string msg) {
@@ -863,6 +1058,7 @@ static class Program {
 
       Application.EnableVisualStyles();
       Application.SetCompatibleTextRenderingDefault(false);
+
       Application.Run(new TrayApp());
       GC.KeepAlive(mutex);
     }
