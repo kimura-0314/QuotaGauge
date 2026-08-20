@@ -9,6 +9,8 @@ $dir = $PSScriptRoot
 $src = Join-Path $dir 'QuotaGauge.cs'
 $out = Join-Path $dir 'QuotaGauge.exe'
 $csc = "$env:windir\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+$ico = Join-Path $dir 'app.ico'
+if (-not (Test-Path $ico)) { & (Join-Path $dir 'tools\make-icon.ps1') }
 
 $bytes = [IO.File]::ReadAllBytes($src)
 if (-not ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) {
@@ -24,6 +26,7 @@ Get-Process -Name 'QuotaGauge' -ErrorAction SilentlyContinue | ForEach-Object {
 
 & $csc /nologo /target:winexe /platform:anycpu /optimize+ `
   /out:"$out" `
+  /win32icon:"$ico" `
   /reference:System.dll,System.Drawing.dll,System.Windows.Forms.dll `
   "$src"
 

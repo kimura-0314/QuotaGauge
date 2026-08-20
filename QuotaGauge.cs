@@ -731,7 +731,9 @@ class TrayApp : ApplicationContext {
     menu.Opening += BuildMenu;
 
     ni = new NotifyIcon();
-    ni.Icon = SystemIcons.Application;
+    // 取得が終わるまでの一瞬と、描画に失敗したときの拠り所。exe に埋めたリングを使う
+    try { ni.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+    catch { ni.Icon = SystemIcons.Application; }
     ni.Text = "利用枠ゲージ";
     ni.ContextMenuStrip = menu;
     ni.Visible = true;

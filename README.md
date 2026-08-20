@@ -1,119 +1,121 @@
 # QuotaGauge
 
-Claude Code と Codex の**利用枠の残りをタスクトレイから確認する**Windows用の常駐ツール。
+English ・ [日本語](README.ja.md)
 
-exe 1つで動く。インストーラも .NET ランタイムの追加も要らない。
+A Windows tray app that shows **how much of your Claude Code and Codex quota is left**.
 
-> **どちらも、それぞれの CLI 自身に聞く。**
-> 認証情報ファイルに触れず、第三者のサーバーへは何も送らない。設定も要らない。
+One exe. No installer, no extra .NET runtime.
+
+> **It asks each CLI about its own usage.**
+> It never touches your credential files, and nothing is sent to any third party. No setup required.
 
 ---
 
-## できること
+## What it does
 
-| 操作 | |
+| Action | |
 |---|---|
-| **アイコン** | 一番厳しい枠の使用率をリングで表示。90%以上は赤、70%以上は橙 |
-| **左クリック** | Claude と Codex の枠を一覧するパネルが開く |
-| **カーソルを乗せる** | それぞれの使用率が出る |
-| **右クリック** | 今すぐ更新／アイコンに出す対象／Claude の取得元／ログ／Windows起動時に開始／終了 |
+| **Icon** | Draws the tightest window as a ring. Red above 90%, amber above 70% |
+| **Left click** | Opens a panel listing every Claude and Codex window |
+| **Hover** | Shows both usage figures |
+| **Right click** | Refresh now / which provider the icon follows / Claude data source / log / start with Windows / quit |
 
-左クリックで開くパネル：
+The panel:
 
-![利用枠パネル](docs/panel.png)
+![Usage panel](docs/panel.png)
 
-3分ごとに自動更新する。5時間枠・週次に加えて、**モデル別の週次枠**（`週次（Fable）`）とプラン名まで出る。
+It refreshes every 3 minutes. Alongside the 5-hour and weekly windows you also get
+**per-model weekly windows** and your plan name.
 
-**アイコンがどちらを映すかは選べる。** 右クリック →「アイコンに出す対象」から、
-`厳しい方`（既定）／`Claude Code`／`Codex` のどれかを選ぶ。主に使うツールは人によって違うので、
-Codex がメインなら Codex だけを映すようにできる。
+**You can choose which provider the icon follows** from the right-click menu: whichever is
+tighter (default), Claude Code only, or Codex only. People lean on different tools.
 
-## インストール
+## Install
 
-1. [Releases](../../releases) から `QuotaGauge.exe` をダウンロードして、好きなフォルダに置く
-   - 署名していないので、**Releases に載せた SHA256 と突き合わせて確認できる**：
+1. Download `QuotaGauge.exe` from [Releases](../../releases) and drop it anywhere
+   - It is unsigned, so check it against the SHA256 published with the release:
      `Get-FileHash .\QuotaGauge.exe`
-2. ダブルクリックで起動する
-   - **署名していない exe なので、Windows SmartScreen が「WindowsによってPCが保護されました」を出す。**
-     `詳細情報` → `実行` で進む。気になる場合は下の[ビルド](#ビルド)から自分でコンパイルする（数秒で終わる）
-3. **アイコンが `^`（隠れているインジケーター）の中にいたら、タスクバーの見える位置へドラッグする**
-   （Windows 11 は新しいトレイアイコンを必ず最初にそこへ入れる）
-4. 右クリック →「Windows起動時に開始」をON
+2. Double-click it
+   - **Because the exe is unsigned, Windows SmartScreen shows "Windows protected your PC".**
+     Choose `More info`, then `Run anyway`. If that bothers you, [build it yourself](#build) — it takes seconds
+3. **If the icon landed in the `^` overflow, drag it onto the visible part of the taskbar**
+   (Windows 11 always puts new tray icons there first)
+4. Right click and turn on "start with Windows"
 
-セットアップはこれだけ。`claude` と `codex` がそれぞれ PATH にあってログイン済みなら、そのまま動く。
+That is the whole setup. As long as `claude` and `codex` are on your PATH and signed in, it works.
 
-## 仕組み
+## How it works
 
-**どちらも「CLI 自身に、あなたの利用枠を教えて」と聞いているだけ。** 自分で認証情報を読んだり、
-API を叩いたりはしない。トークンの更新も各 CLI がやるので、期限切れで止まることがない。
+**Both sides simply ask the CLI what your usage is.** QuotaGauge never reads credentials or calls
+an API itself. Each CLI refreshes its own token, so an expired one never stalls the app.
 
 ### Claude Code
 
-`claude` を stream-json モードで起動し、control request を1行流す。
+It starts `claude` in stream-json mode and writes a single control request:
 
 ```
 {"type":"control_request","request_id":"1","request":{"subtype":"get_usage"}}
 ```
 
-返ってくる `rate_limits.limits[]` から `kind` / `percent` / `resets_at` / `scope` を読む。
-`subscription_type`（`max` など）も一緒に来るので、パネルの見出しに出している。
+It reads `kind`, `percent`, `resets_at` and `scope` out of the `rate_limits.limits[]` that come
+back. The response also carries `subscription_type`, which becomes part of the panel heading.
 
-このリクエストは Claude Code 本体の `/usage` と同じデータを返す。**モデルは呼ばれないので課金されない**
-（実測で `total_cost_usd: 0` / `model_usage: {}` / `total_api_duration_ms: 0`）。
+This is the same data that Claude Code's own `/usage` shows. **No model is invoked, so nothing is
+billed** — measured as `total_cost_usd: 0`, `model_usage: {}`, `total_api_duration_ms: 0`.
 
-> ⚠️ **`get_usage` は実験的なインターフェース。**
-> Claude Code のスキーマにも `Experimental — the response shape may change` と書かれており、
-> SDK 側のメソッド名は `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()`。
-> 将来かたちが変わって動かなくなる可能性がある。
+> **`get_usage` is an experimental interface.** Claude Code's own schema describes it as
+> `Experimental — the response shape may change`, and the SDK method is named
+> `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()`.
+> It may stop working when that shape changes.
 
-起動に**7〜10秒**かかる（実測。MCP と hook は読み込まないよう指定して 16.6秒から短縮した）。
-取得はバックグラウンドで走るので、画面が固まることはない。
+Startup costs **7–10 seconds** (measured; passing empty MCP and hook configs brought that down
+from 16.6s). Fetching happens on a background thread, so the UI never blocks.
 
 ### Codex
 
-`codex app-server` の JSON-RPC を呼ぶ。
+It calls the `codex app-server` JSON-RPC:
 
 ```
 initialize
 account/rateLimits/read
 ```
 
-このメソッドは `codex app-server generate-json-schema` が出力する**公式スキーマに定義されている**もの。
-レスポンスの `rateLimits.primary` / `secondary` から `usedPercent` / `resetsAt` / `windowDurationMins` を読む。
-こちらは1秒ほどで返る。
+That method is **defined in the schema that `codex app-server generate-json-schema` emits**. It
+reads `usedPercent`, `resetsAt` and `windowDurationMins` from `rateLimits.primary` and
+`secondary`. This side returns in about a second.
 
-> Codex CLI に telegram プラグインが入っている環境向けに、app-server を呼ぶときは
-> `TELEGRAM_STATE_DIR` を一時ディレクトリへ逃がしている（常駐中のポーラーを止めさせないため）。
+> For setups where the Codex CLI carries a telegram plugin, `TELEGRAM_STATE_DIR` is pointed at a
+> temporary directory when app-server is invoked, so a poller already running is left alone.
 
-<a id="claude-source"></a>
+### The Claude data source can be switched
 
-### Claude の取得元は切り替えられる
+Right click and open the Claude data source menu. **The default is normally what you want.**
 
-右クリック →「Claude の取得元」。**通常は既定のままでよい。**
-
-| | ① Claude Code に聞く（既定） | ② 同じ問い合わせ先を直接 | ③ ステータスライン経由 |
+| | 1. Ask Claude Code (default) | 2. Call the same endpoint directly | 3. Via the status line |
 |---|---|---|---|
-| 事前の設定 | 要らない | 要らない | **必要**（下記） |
-| 認証情報 | **触れない** | `.credentials.json` を読む | **触れない** |
-| トークン期限切れ | **自動更新される** | **401 で止まる** | 影響なし |
-| モデル別の枠 | **出る** | **出る** | 出ない |
-| 値の鮮度 | **常に最新** | **常に最新** | 呼ばれた時点のまま |
-| 所要 | 7〜10秒 | ネットワーク1往復ぶん | ファイルを読むだけ |
-| 規約 | CLI に聞くだけ | **グレー**（下記） | 公開経路のみ |
+| Setup | none | none | **required** (below) |
+| Credentials | **untouched** | reads `.credentials.json` | **untouched** |
+| Expired token | **refreshed automatically** | **stops with a 401** | unaffected |
+| Per-model windows | **yes** | **yes** | no |
+| Freshness | **always current** | **always current** | frozen at the last call |
+| Cost | 7–10s | one network round trip | just reads a file |
+| Terms | asks the CLI | **grey area** (below) | published route only |
 
-**②を選ぶ理由は速度だけ。** `~/.claude/.credentials.json` のトークンで
-`https://api.anthropic.com/api/oauth/usage` を直接叩く。
+**The only reason to pick 2 is speed.** It uses the token in `~/.claude/.credentials.json` to call
+`https://api.anthropic.com/api/oauth/usage` directly.
 
-> ⚠️ これは公開されたインターフェースではない。[Anthropic Consumer Terms](https://www.anthropic.com/legal/consumer-terms) 第3条は
-> 「APIキー経由または明示的に許可された場合を除き、スクリプト等の自動的手段でサービスにアクセスすること」を
-> 禁止しており、**この経路がその除外条件を満たすとは読みにくい**。使うかどうかは各自の判断で。
+> That is not a published interface. Clause 3 of the
+> [Anthropic Consumer Terms](https://www.anthropic.com/legal/consumer-terms) prohibits accessing
+> the services through automated or non-human means, whether through a bot, script, or otherwise,
+> except via an API key or where otherwise explicitly permitted — and **it is hard to read this
+> route as meeting either exception**. Your call.
 
-**③はもう選ぶ理由がない**（①が上位互換）。ステータスラインは
-ターミナルで Claude Code を動かしているときにしか呼ばれないので、値が古いままになる。
-使う場合は `~/.claude/settings.json` の `statusLine` スクリプトへ次を足す：
+**There is no longer a reason to pick 3** (1 supersedes it). The status line only runs while you
+have Claude Code open in a terminal, so its values go stale. If you want it anyway, add this to
+the `statusLine` script in `~/.claude/settings.json`:
 
 ```python
-# 受け取った JSON を d としたあと
+# after parsing the incoming JSON into d
 try:
     import os, time, json
     rl = d.get('rate_limits')
@@ -128,51 +130,55 @@ except Exception:
     pass
 ```
 
-### 設定とログの置き場所
+### Where settings and logs live
 
-`config.json` と `quotagauge.log` は **exe と同じフォルダ**に作る（USBメモリなどに入れて持ち運べるように）。
-そこへ書き込めない場所（Program Files など）に置かれた場合だけ、
-`%LOCALAPPDATA%\QuotaGauge\` へ逃がす。
+`config.json` and `quotagauge.log` are written **next to the exe**, so you can carry the whole
+thing on a USB stick. Only when that location is not writable (Program Files, say) do they fall
+back to `%LOCALAPPDATA%\QuotaGauge\`.
 
-ログは**エラーが起きたときだけ**書かれる。行が増えていない＝正常に取得できている、と読んでよい。
+The log is **only written when something fails**. No new lines means fetching is working.
 
-## うまくいかないとき
+## When something is wrong
 
-| 症状 | |
+The interface is in Japanese, so the messages below are quoted as they appear.
+
+| Symptom | |
 |---|---|
-| **「claude から応答がありません」** | `claude` が PATH にない、またはログインしていない。ターミナルで `claude --version` が通るか確かめる |
-| **「codex app-server から応答がありません」** | `codex` が PATH にない、またはログインしていない。`codex app-server` が動くか確かめる |
-| **「ログインし直してください（HTTP 401）」** | ②を使っている場合のみ。Claude Code に入り直せば直る（①なら起きない）。<br>失敗が続くあいだは間隔を 3分→6→12→…→60分 と自動で伸ばす。「今すぐ更新」で待機を無視して再試行できる |
-| **Claude の値が古いまま** | ③を使っている。①へ戻す（右クリック →「Claude の取得元」） |
-| **トレイにアイコンが出ない** | Windows 11 は新しいアイコンを `^` の中に入れる。そこからタスクバーへドラッグする |
+| `claude から応答がありません` | `claude` is not on your PATH, or you are not signed in. Check that `claude --version` runs |
+| `codex app-server から応答がありません` | Same for `codex`. Check that `codex app-server` runs |
+| `ログインし直してください（HTTP 401）` | Only when using source 2. Sign in to Claude Code again — source 1 never hits this. While failures continue the interval backs off 3min, 6, 12, up to 60. "Refresh now" retries immediately |
+| Claude figures look stale | You are on source 3. Switch back to 1 from the right-click menu |
+| No icon in the tray | Windows 11 hides new icons under `^`. Drag it onto the taskbar |
 
-## ビルド
+## Build
 
 ```powershell
 .\build.ps1
 ```
 
-Windows 同梱の `csc.exe` を使うので、Visual Studio も .NET SDK も要らない。
+It uses the `csc.exe` that ships with Windows, so no Visual Studio and no .NET SDK.
+`app.ico` is regenerated by `tools/make-icon.ps1` when missing — it runs the same drawing code the
+tray icon uses, so the two never drift apart.
 
-> ⚠️ `QuotaGauge.cs` は **UTF-8 BOM付き**で保存すること（`build.ps1` が自動で直す）。
+> Save `QuotaGauge.cs` as **UTF-8 with BOM** (`build.ps1` fixes this for you).
 
-## 動作環境
+## Requirements
 
 - Windows 10 / 11
-- .NET Framework 4.x（Windowsに標準で入っている）
-- `claude` と `codex` が PATH にあり、それぞれログイン済みであること
-  （片方だけでも、入っている方は表示される）
-- 管理者権限は不要
+- .NET Framework 4.x (ships with Windows)
+- `claude` and `codex` on your PATH and signed in — either one alone is fine, whichever is present
+  shows up
+- No administrator rights
 
-## 免責
+## Disclaimer
 
-このプロジェクトは非公式で、Anthropic および OpenAI とは関係がありません。
+This project is unofficial and is not affiliated with Anthropic or OpenAI.
 
-表示される値は各ツールが提供する情報をそのまま出しているだけで、正確性・即時性は保証しません。
-請求や契約上の根拠として使わないでください。
+The figures are whatever each tool reports, shown as-is. Accuracy and timeliness are not
+guaranteed. Do not use them as a basis for billing or contractual claims.
 
-インターフェースや値の形式は予告なく変わることがあります。
+Interfaces and value formats may change without notice.
 
-## ライセンス
+## License
 
 [MIT](LICENSE)
