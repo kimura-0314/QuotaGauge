@@ -9,6 +9,8 @@ exe 1つで動く。インストーラも .NET ランタイムの追加も要ら
 > **どちらも、それぞれの CLI 自身に聞く。**
 > 認証情報ファイルに触れず、第三者のサーバーへは何も送らない。設定も要らない。
 
+作った人：kimura — [X](https://x.com/kimura_0314) ・ [note](https://note.com/cozy_auklet6005) ・ [kimuraのGAS部](https://note.com/cozy_auklet6005/membership) ・ [Zenn](https://zenn.dev/kimura0314) ・ [YouTube](https://www.youtube.com/@kimura_1307)
+
 ---
 
 ## できること

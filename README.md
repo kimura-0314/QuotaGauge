@@ -9,6 +9,8 @@ One exe. No installer, no extra .NET runtime.
 > **It asks each CLI about its own usage.**
 > It never touches your credential files, and nothing is sent to any third party. No setup required.
 
+Made by kimura — [X](https://x.com/kimura_0314) · [note](https://note.com/cozy_auklet6005) · [kimuraのGAS部](https://note.com/cozy_auklet6005/membership) · [Zenn](https://zenn.dev/kimura0314) · [YouTube](https://www.youtube.com/@kimura_1307)
+
 ---
 
 ## What it does
