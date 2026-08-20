@@ -34,8 +34,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Claude Code と Codex の利用枠を通知領域に表示する")]
 [assembly: System.Reflection.AssemblyCompany("kimura")]
 [assembly: System.Reflection.AssemblyCopyright("MIT License")]
-[assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.1.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.1.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.1.1.0")]
 
 namespace QuotaGauge {
 
@@ -505,7 +505,7 @@ static class CodexApi {
       proc = Process.Start(psi);
       proc.StandardInput.WriteLine(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":" +
-        "{\"name\":\"QuotaGauge\",\"title\":\"QuotaGauge\",\"version\":\"2.1.0\"}}}");
+        "{\"name\":\"QuotaGauge\",\"title\":\"QuotaGauge\",\"version\":\"2.1.1\"}}}");
       proc.StandardInput.Flush();
       proc.StandardInput.WriteLine(
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}");
@@ -586,6 +586,16 @@ class QuotaPanel : Form {
   const int RowH = 60;
   const int HeadH = 26;
 
+  // フォーカスが外れて隠れた時刻。トレイアイコンでの開閉判定に使う（下の JustHidden）
+  DateTime hiddenAt = DateTime.MinValue;
+
+  // トレイアイコンを押すと、クリックが届く前に Deactivate が飛んでパネルが隠れる。
+  // そのため OnClick の時点では「閉じている」ように見えて、開き直してしまう。
+  // 隠れた直後かどうかを見れば、その1回が「閉じる操作」だったと分かる
+  public bool JustHidden {
+    get { return (DateTime.Now - hiddenAt).TotalMilliseconds < 300; }
+  }
+
   public event EventHandler RefreshRequested;
 
   public QuotaPanel() {
@@ -612,7 +622,7 @@ class QuotaPanel : Form {
     };
     Controls.Add(refreshBtn);
 
-    Deactivate += delegate { Hide(); };
+    Deactivate += delegate { hiddenAt = DateTime.Now; Hide(); };
   }
 
   // 取得し直した結果をパネルへ反映する。
@@ -631,6 +641,7 @@ class QuotaPanel : Form {
 
   public void ShowAt(Snapshot s, Point anchor) {
     snap = s;
+    hiddenAt = DateTime.MinValue;
 
     int rows = (s != null && s.RowCount > 0) ? s.RowCount : 1;
     int heads = (s != null) ? s.Providers.Count : 1;
@@ -854,7 +865,7 @@ class TrayApp : ApplicationContext {
 
   void OnClick(object sender, MouseEventArgs e) {
     if (e.Button != MouseButtons.Left) return;
-    if (panel.Visible) { panel.Hide(); return; }
+    if (panel.Visible || panel.JustHidden) { panel.Hide(); return; }
     panel.ShowAt(snap, Cursor.Position);
   }
 

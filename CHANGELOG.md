@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.1
+
+### Fixed
+
+- **Clicking the tray icon while the panel was open reopened it instead of closing it.** The click
+  moves focus away first, so `Deactivate` had already hidden the panel by the time the click
+  handler ran — it saw a hidden panel and showed it again. The panel now remembers when it was
+  hidden, and a click arriving right after that is treated as the close it was meant to be.
+  Until now the only way to dismiss the panel was to click somewhere else.
+- `tools/make-icon.ps1` is saved as UTF-8 with a BOM. Without it Windows PowerShell 5.1 reads the
+  file as ANSI and its Japanese output comes out as mojibake.
+
 ## 2.1.0 — first public release
 
 Everything before this lived only on my machine, so the history below starts here.
