@@ -186,9 +186,9 @@ If you are on a Mac, install CodexBar. It does more than this ever will.
 
 ## Author
 
-kimura — [X](https://x.com/kimura_0314) · [note](https://note.com/cozy_auklet6005) · [Zenn](https://zenn.dev/kimura0314) · [YouTube](https://www.youtube.com/@kimura_1307)
+kimura — [X](https://x.com/kimura_0314) · [note](https://note.com/cozy_auklet6005) · [kimuraのGAS部 (membership)](https://note.com/cozy_auklet6005/membership) · [Zenn](https://zenn.dev/kimura0314) · [YouTube](https://www.youtube.com/@kimura_1307)
 
-I build small tools around Google Apps Script and write about them, mostly in Japanese.
+I build small tools around Google Apps Script and write about them.
 
 ## Disclaimer
 
