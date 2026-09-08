@@ -491,8 +491,27 @@ static class CodexApi {
       if (rl == null) { p.Error = S.T("利用枠の情報がありません", "No usage data"); return p; }
 
       p.Note = Json.Str(rl, "planType");
-      Add(p, Json.Object(rl, "primary"));
-      Add(p, Json.Object(rl, "secondary"));
+      Add(p, Json.Object(rl, "primary"), null);
+      Add(p, Json.Object(rl, "secondary"), null);
+
+      // 手動リセットの残り回数（Plus の「あと N 回リセット可能」）。応答の外側に付いてくる
+      string credits = Json.Object(res, "rateLimitResetCredits");
+      double? avail = credits != null ? Json.Num(credits, "availableCount") : null;
+      if (avail.HasValue && avail.Value > 0)
+        p.Note = (p.Note ?? "") + S.T(" ・ リセット残 ", " · resets left ") + (int)avail.Value;
+
+      // 主枠とは別に limitId ごとの枠が付く（例: gpt-reserve）。Codex アプリには出ないが、減っていくのは同じ
+      string byId = Json.Object(res, "rateLimitsByLimitId");
+      if (byId != null)
+        foreach (var m in Regex.Matches(byId, "\"limitId\"\\s*:\\s*\"([^\"]+)\"")) {
+          string id = ((Match)m).Groups[1].Value;
+          if (id == Json.Str(rl, "limitId")) continue;
+          string other = Json.Object(byId, id);
+          if (other == null) continue;
+          string name = Json.Str(other, "limitName") ?? id;
+          Add(p, Json.Object(other, "primary"), name);
+          Add(p, Json.Object(other, "secondary"), name);
+        }
       p.DataTime = DateTime.Now;
 
       if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
@@ -502,7 +521,7 @@ static class CodexApi {
     return p;
   }
 
-  static void Add(Provider p, string obj) {
+  static void Add(Provider p, string obj, string name) {
     if (string.IsNullOrEmpty(obj)) return;
     double? used = Json.Num(obj, "usedPercent");
     if (!used.HasValue) return;
@@ -512,6 +531,7 @@ static class CodexApi {
 
     double? win = Json.Num(obj, "windowDurationMins");
     l.Label = win.HasValue ? Json.WindowLabel(win.Value) : S.T("利用枠", "Usage");
+    if (name != null) l.Label = name;   // リングの下は狭い。窓の長さはリセット日で分かる
 
     double? reset = Json.Num(obj, "resetsAt");
     if (reset.HasValue) l.ResetsAt = Json.FromUnix(reset.Value);
