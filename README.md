@@ -89,6 +89,19 @@ reads `usedPercent`, `resetsAt` and `windowDurationMins` from `rateLimits.primar
 > For setups where the Codex CLI carries a telegram plugin, `TELEGRAM_STATE_DIR` is pointed at a
 > temporary directory when app-server is invoked, so a poller already running is left alone.
 
+### Optional: Antigravity CLI (`agy`) and Grok Build (`grok`)
+
+Off by default. Turn either on from the right-click menu (**Also watch**) or in `config.json`
+(`"agy": "on"`, `"grok": "on"`). Both are read the same way as the two above — by asking the CLI
+itself, without touching credentials or the network:
+
+| | How | What you get |
+|---|---|---|
+| **agy** | `agy --output-format json --print "/quota"` — print mode answers read-only slash commands without starting a turn (agy 1.1.11+) | Weekly remaining % per model group (Gemini / Claude-and-GPT) and the reset time |
+| **grok** | `grok agent stdio`, then the ACP extension `_x.ai/billing` | Credit usage % for the current weekly period and when it ends; on-demand usage if you have a cap |
+
+The tray icon can follow either of them too once enabled.
+
 ### The Claude data source can be switched
 
 Right click and open the Claude data source menu. **The default is normally what you want.**
@@ -157,6 +170,8 @@ The log is **only written when something fails**. No new lines means fetching is
 |---|---|
 | `No response from claude` | `claude` is not on your PATH, or you are not signed in. Check that `claude --version` runs |
 | `No response from codex app-server` | Same for `codex`. Check that `codex app-server` runs |
+| `No response from agy` / `No response from grok` | Only when you turned them on. Same check: on PATH and signed in. Run `QuotaGauge.exe --once` and read `last-fetch.txt` to see exactly what each provider returned |
+| `agy did not answer /quota (old version?)` | Print-mode slash commands need agy 1.1.11 or later. Run `agy update` |
 | `Sign in to Claude Code again (token expired, HTTP 401)` | Only when using source 2. Source 1 never hits this. While failures continue the interval backs off 3min, 6, 12, up to 60. "Refresh now" retries immediately |
 | Claude figures look stale | You are on source 3. Switch back to 1 from the right-click menu |
 | No icon in the tray | Windows 11 hides new icons under `^`. Drag it onto the taskbar |

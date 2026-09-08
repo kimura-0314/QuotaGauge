@@ -9,7 +9,10 @@
 //                 ネットワークにも触れない。モデルは呼ばれないので課金もされない。
 //                 右クリックから、直接叩く経路／ステータスライン経由にも切り替えられる
 //   Codex       … codex app-server の JSON-RPC `account/rateLimits/read` を呼ぶ
+//   agy         … （任意・既定OFF）`agy --print "/quota"` の print モード。turn は走らず枠も減らない
+//   grok        … （任意・既定OFF）`grok agent stdio` の ACP 拡張 `_x.ai/billing` を呼ぶ
 //
+// 4つとも「CLI 自身に聞く」形で揃えてある。認証情報にもネットワークにも触れない。
 // 取得した値はローカルに表示するだけで、第三者のサーバーへは何も送らない。
 //
 // ビルド: build.ps1
@@ -34,8 +37,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Shows Claude Code and Codex quota in the notification area")]
 [assembly: System.Reflection.AssemblyCompany("kimura")]
 [assembly: System.Reflection.AssemblyCopyright("MIT License")]
-[assembly: System.Reflection.AssemblyVersion("2.2.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.3.0.0")]
 
 namespace QuotaGauge {
 
@@ -118,9 +121,9 @@ class Snapshot {
   public List<Provider> Providers = new List<Provider>();
   public DateTime FetchedAt;
 
-  // source が "claude"/"codex" ならそのプロバイダだけ、それ以外なら全部を見る
+  // source が "both"（か空）なら全部、それ以外はその Key のプロバイダだけを見る
   static bool Match(Provider p, string source) {
-    return source != "claude" && source != "codex" ? true : p.Key == source;
+    return string.IsNullOrEmpty(source) || source == "both" ? true : p.Key == source;
   }
 
   public int WorstOf(string source) {
@@ -557,11 +560,161 @@ static class CodexApi {
   }
 }
 
+// ------------------------------------------------------------------ 子プロセス共通
+// stdin に何行か流し、stdout を match が真になる行まで読む。時間切れなら殺す。
+// 通知が混ざって流れる JSON-RPC 系はどれもこの形なので、agy / grok はこれを使う
+static class Subprocess {
+  public static string ReadUntil(string command, string args, string[] stdinLines,
+                                 Predicate<string> match, int timeoutMs) {
+    var psi = new ProcessStartInfo(command, args);
+    psi.WorkingDirectory = Paths.WorkDir;
+    psi.UseShellExecute = false;
+    psi.RedirectStandardInput = true;
+    psi.RedirectStandardOutput = true;
+    psi.RedirectStandardError = true;
+    psi.CreateNoWindow = true;
+    psi.StandardOutputEncoding = Encoding.UTF8;
+    psi.EnvironmentVariables["TELEGRAM_STATE_DIR"] =
+      Path.Combine(Path.GetTempPath(), "quotagauge-no-telegram");
+
+    Process proc = null;
+    try {
+      proc = Process.Start(psi);
+      foreach (var l in stdinLines) { proc.StandardInput.WriteLine(l); proc.StandardInput.Flush(); }
+      if (stdinLines.Length == 0) proc.StandardInput.Close();
+
+      string found = null;
+      var reader = new Thread(delegate () {
+        try {
+          for (int i = 0; i < 500; i++) {
+            string line = proc.StandardOutput.ReadLine();
+            if (line == null) break;
+            if (match(line)) { found = line; break; }
+          }
+        } catch { }
+      });
+      reader.IsBackground = true;
+      reader.Start();
+      if (!reader.Join(timeoutMs)) { try { proc.Kill(); } catch { } }
+      return found;
+    } finally {
+      if (proc != null) {
+        try { proc.StandardInput.Close(); } catch { }
+        try { if (!proc.WaitForExit(3000)) proc.Kill(); } catch { }
+        try { proc.Dispose(); } catch { }
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------------------ agy（Antigravity CLI）
+// print モードは読み取り専用のスラッシュコマンドに「turn を起こさず」答える（agy 1.1.11 以降）。
+// `/quota` は週次のグループ（Gemini 系／Claude・GPT 系）ごとに remaining_fraction と reset_time を返す。
+// ⚠ bash から試すときは `MSYS_NO_PATHCONV=1` が要る（`/quota` が Windows パスに化ける）。ここは cmd 経由なので無縁
+static class AgyApi {
+  public static Provider Fetch() {
+    var p = new Provider { Key = "agy", Name = "Antigravity" };
+    try {
+      string res = Subprocess.ReadUntil("cmd.exe", "/c agy --output-format json --print /quota",
+                                        new string[0], delegate (string l) { return l.Contains("\"groups\""); }, 40000);
+      if (res == null) { p.Error = S.T("agy から応答がありません（PATH とログイン状態を確認）", "No response from agy (check your PATH and that you are signed in)"); return p; }
+      // turn が走ったなら /quota として扱われていない
+      if ((Json.Num(res, "num_turns") ?? 0) > 0) { p.Error = S.T("agy が /quota を実行しませんでした（版が古い？）", "agy did not answer /quota (old version?)"); return p; }
+
+      foreach (var grp in Json.Objects(res, "groups")) {
+        string name = Json.Str(grp, "name") ?? "";
+        string shortName = name.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0 ? "Gemini"
+                         : name.IndexOf("Claude", StringComparison.OrdinalIgnoreCase) >= 0 ? "Claude/GPT" : name;
+        foreach (var b in Json.Objects(grp, "buckets")) {
+          double? rem = Json.Num(b, "remaining_fraction");
+          if (!rem.HasValue) continue;
+          var l = new Limit { Percent = (int)Math.Round((1 - rem.Value) * 100) };
+          l.Severity = l.Percent >= 90 ? "critical" : "normal";
+          string win = Json.Str(b, "window") ?? "";
+          l.Label = (win == "weekly" ? S.T("週次（", "Weekly (") : S.T("枠（", "Limit (")) + shortName + S.T("）", ")");
+          l.ResetsAt = Json.Iso(b, "reset_time");
+          p.Limits.Add(l);
+        }
+      }
+      p.DataTime = DateTime.Now;
+      if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
+    } catch (Exception ex) {
+      p.Error = ex.Message;
+    }
+    return p;
+  }
+}
+
+// ------------------------------------------------------------------ grok（Grok Build）
+// `grok agent stdio` は ACP（JSON-RPC）で話す。拡張メソッドは `_x.ai/…`（先頭アンダースコア）。
+// `_x.ai/billing` が creditUsagePercent と週の期間を返す。クレジット制なので「使った%」1本＋期限。
+// ⚠ initialize 直後の通知に MCP 設定の環境変数（トークン類）がそのまま流れてくる。stdout を絶対にログへ落とさない
+static class GrokApi {
+  public static Provider Fetch() {
+    var p = new Provider { Key = "grok", Name = "Grok Build" };
+    try {
+      string res = Subprocess.ReadUntil("cmd.exe", "/c grok agent stdio", new string[] {
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1," +
+        "\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false},\"terminal\":false}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"_x.ai/billing\",\"params\":{}}"
+      }, delegate (string l) { return l.Contains("\"id\":2"); }, 40000);
+      if (res == null) { p.Error = S.T("grok から応答がありません（PATH とログイン状態を確認）", "No response from grok (check your PATH and that you are signed in)"); return p; }
+      if (res.Contains("\"error\"")) { p.Error = Json.Str(res, "message") ?? S.T("利用枠を取得できませんでした", "Could not read the usage data"); return p; }
+
+      string cfg = Json.Object(res, "config");
+      if (cfg == null) { p.Error = S.T("利用枠の情報がありません", "No usage data"); return p; }
+      p.Note = Json.Str(res, "subscription_tier");
+
+      double? used = Json.Num(cfg, "creditUsagePercent");
+      if (used.HasValue) {
+        // creditUsagePercent は % として読んでいる（1.0 = 1%）。割合なら 100 倍が要るが、その場合 model が動いた事実と合わない
+        var l = new Limit { Percent = (int)Math.Round(used.Value) };
+        l.Severity = l.Percent >= 90 ? "critical" : "normal";
+        string period = Json.Object(cfg, "currentPeriod");
+        string type = period != null ? (Json.Str(period, "type") ?? "") : "";
+        l.Label = type.Contains("WEEKLY") ? S.T("週次クレジット", "Weekly credits") : S.T("クレジット", "Credits");
+        if (period != null) l.ResetsAt = Json.Iso(period, "end");
+        p.Limits.Add(l);
+      }
+      // 従量（on-demand）を使う設定なら、その消化も1本出す
+      string cap = Json.Object(cfg, "onDemandCap"), od = Json.Object(cfg, "onDemandUsed");
+      double? capV = cap != null ? Json.Num(cap, "val") : null, odV = od != null ? Json.Num(od, "val") : null;
+      if (capV.HasValue && capV.Value > 0 && odV.HasValue) {
+        var l = new Limit { Label = S.T("従量分", "On-demand"), Percent = (int)Math.Round(odV.Value * 100 / capV.Value) };
+        l.Severity = l.Percent >= 90 ? "critical" : "normal";
+        p.Limits.Add(l);
+      }
+      p.DataTime = DateTime.Now;
+      if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
+    } catch (Exception ex) {
+      p.Error = ex.Message;
+    }
+    return p;
+  }
+}
+
 static class Usage {
+  // 4本を直列に待つと 30秒近くかかるので、並列に取って一番遅いもの（Claude の約8秒）に揃える
   public static Snapshot FetchAll() {
     var s = new Snapshot { FetchedAt = DateTime.Now };
-    s.Providers.Add(ClaudeApi.Fetch());
-    s.Providers.Add(CodexApi.Fetch());
+    var jobs = new List<Func<Provider>> { ClaudeApi.Fetch, CodexApi.Fetch };
+    if (Config.AgyEnabled)  jobs.Add(AgyApi.Fetch);
+    if (Config.GrokEnabled) jobs.Add(GrokApi.Fetch);
+
+    var results = new Provider[jobs.Count];
+    var threads = new List<Thread>();
+    for (int i = 0; i < jobs.Count; i++) {
+      int idx = i;
+      var t = new Thread(delegate () {
+        try { results[idx] = jobs[idx](); }
+        catch (Exception ex) { results[idx] = new Provider { Key = "?", Name = "?", Error = ex.Message }; }
+      });
+      t.IsBackground = true;
+      t.Start();
+      threads.Add(t);
+    }
+    foreach (var t in threads) t.Join(90000);
+    foreach (var r in results) if (r != null) s.Providers.Add(r);
     return s;
   }
 }
@@ -914,7 +1067,19 @@ class TrayApp : ApplicationContext {
     AddIconSource(iconSrc, "both",   S.T("厳しい方", "Whichever is tighter"));
     AddIconSource(iconSrc, "claude", "Claude Code");
     AddIconSource(iconSrc, "codex",  "Codex");
+    if (Config.AgyEnabled)  AddIconSource(iconSrc, "agy",  "Antigravity");
+    if (Config.GrokEnabled) AddIconSource(iconSrc, "grok", "Grok Build");
     menu.Items.Add(iconSrc);
+
+    // 任意の2本。入れていない人には見せる意味がないので、既定は OFF
+    var extra = new ToolStripMenuItem(S.T("ほかの CLI も見る", "Also watch"));
+    var agy = new ToolStripMenuItem("Antigravity (agy)") { Checked = Config.AgyEnabled };
+    agy.Click += delegate { Config.AgyEnabled = !Config.AgyEnabled; Reload(true); };
+    extra.DropDownItems.Add(agy);
+    var grok = new ToolStripMenuItem("Grok Build (grok)") { Checked = Config.GrokEnabled };
+    grok.Click += delegate { Config.GrokEnabled = !Config.GrokEnabled; Reload(true); };
+    extra.DropDownItems.Add(grok);
+    menu.Items.Add(extra);
 
     var claudeSrc = new ToolStripMenuItem(S.T("Claude の取得元", "Claude data source"));
     AddClaudeSource(claudeSrc, "cli",        S.T("Claude Code に聞く（既定）", "Ask Claude Code (default)"));
@@ -1023,26 +1188,32 @@ static class Config {
     } catch { return fallback; }
   }
 
-  static void Write(string iconSource, string claudeSource) { Write(iconSource, claudeSource, Language); }
-
-  static void Write(string iconSource, string claudeSource, string language) {
+  // 1つ変えるときも全キーを書き直す。書かなかったキーが消えると既定に戻って気づけない
+  static void Write(string key, string value) {
+    string iconSource = key == "iconSource"   ? value : IconSource;
+    string claudeSrc  = key == "claudeSource" ? value : ClaudeSource;
+    string agy        = key == "agy"          ? value : (AgyEnabled ? "on" : "off");
+    string grok       = key == "grok"         ? value : (GrokEnabled ? "on" : "off");
     try {
       File.WriteAllText(Path,
         "{\r\n" +
-        "  \"_comment\": \"iconSource: which provider the tray icon reflects (both|claude|codex). " +
-        "claudeSource: where Claude numbers come from (cli|endpoint|statusline). language: auto|ja|en (auto follows Windows).\",\r\n" +
+        "  \"_comment\": \"iconSource: which provider the tray icon reflects (both|claude|codex|agy|grok). " +
+        "claudeSource: where Claude numbers come from (cli|endpoint|statusline). language: auto|ja|en (auto follows Windows). " +
+        "agy / grok: on|off, also watch Antigravity CLI / Grok Build (off by default).\",\r\n" +
         "  \"iconSource\": \"" + iconSource + "\",\r\n" +
-        "  \"claudeSource\": \"" + claudeSource + "\",\r\n" +
-        "  \"language\": \"" + language + "\"\r\n" +
+        "  \"claudeSource\": \"" + claudeSrc + "\",\r\n" +
+        "  \"language\": \"" + Language + "\",\r\n" +
+        "  \"agy\": \"" + agy + "\",\r\n" +
+        "  \"grok\": \"" + grok + "\"\r\n" +
         "}\r\n", new UTF8Encoding(false));
     } catch { }
   }
 
-  // アイコンがどのプロバイダを映すか。"both"（既定）/ "claude" / "codex"
+  // アイコンがどのプロバイダを映すか。"both"（既定）/ "claude" / "codex" / "agy" / "grok"
   // 主に使うツールが人によって違うので、選べるようにしてある
   public static string IconSource {
     get { return Read("iconSource", "both"); }
-    set { Write(value, ClaudeSource); }
+    set { Write("iconSource", value); }
   }
 
   // Claude の数値をどこから取るか。
@@ -1051,7 +1222,17 @@ static class Config {
   //   "statusline"   … statusline のキャッシュを読む。5時間枠と週次だけ
   public static string ClaudeSource {
     get { return Read("claudeSource", "cli"); }
-    set { Write(IconSource, value); }
+    set { Write("claudeSource", value); }
+  }
+
+  // 任意の2本。"on" のときだけ取りに行く（入れていない環境で「応答なし」を並べない）
+  public static bool AgyEnabled {
+    get { return Read("agy", "off") == "on"; }
+    set { Write("agy", value ? "on" : "off"); }
+  }
+  public static bool GrokEnabled {
+    get { return Read("grok", "off") == "on"; }
+    set { Write("grok", value ? "on" : "off"); }
   }
 
   // 表示言語。"auto"（既定）は Windows の表示言語に従う。"ja" / "en" で固定できる
@@ -1082,7 +1263,23 @@ static class Log {
 
 static class Program {
   [STAThread]
-  static void Main() {
+  static void Main(string[] args) {
+    // `QuotaGauge.exe --once` … 常駐せずに1回だけ取って last-fetch.txt に書いて終わる。
+    // 「パネルに何が出るはずか」を目で確かめるための口。トレイをクリックせずに検証できる
+    if (args.Length > 0 && args[0] == "--once") {
+      var s = Usage.FetchAll();
+      var sb = new StringBuilder();
+      sb.AppendLine("fetched " + s.FetchedAt.ToString("yyyy-MM-dd HH:mm:ss"));
+      foreach (var p in s.Providers) {
+        sb.AppendLine("[" + p.Key + "] " + p.Heading + (p.Error != null ? "  ERROR: " + p.Error : ""));
+        foreach (var l in p.Limits)
+          sb.AppendLine("  " + l.Label + "  " + l.Percent + "%  " + l.Severity + "  " +
+                        (l.ResetsAt.HasValue ? l.ResetsAt.Value.ToString("M/d HH:mm") + " " + l.Remaining : ""));
+      }
+      try { File.WriteAllText(System.IO.Path.Combine(Paths.DataDir, "last-fetch.txt"), sb.ToString(), new UTF8Encoding(false)); } catch { }
+      return;
+    }
+
     bool created;
     using (var mutex = new Mutex(true, "Local\\QuotaGaugeTray", out created)) {
       if (!created) return;

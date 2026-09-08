@@ -89,6 +89,18 @@ account/rateLimits/read
 > Codex CLI に telegram プラグインが入っている環境向けに、app-server を呼ぶときは
 > `TELEGRAM_STATE_DIR` を一時ディレクトリへ逃がしている（常駐中のポーラーを止めさせないため）。
 
+### 任意：Antigravity CLI（`agy`）と Grok Build（`grok`）
+
+既定は OFF。右クリック →「ほかの CLI も見る」か、`config.json` の `"agy": "on"` / `"grok": "on"` で有効にする。
+どちらも上の2つと同じ「CLI 自身に聞く」形で、認証情報にもネットワークにも触れない。
+
+| | 叩き方 | 出るもの |
+|---|---|---|
+| **agy** | `agy --output-format json --print "/quota"`。print モードは読み取り専用のスラッシュコマンドに turn を起こさず答える（agy 1.1.11 以降） | モデル群（Gemini／Claude・GPT）ごとの週次の残り%とリセット時刻 |
+| **grok** | `grok agent stdio` に ACP 拡張 `_x.ai/billing` | 今週のクレジット使用%と期間の終わり。従量の上限があればその消化も |
+
+有効にすると、トレイのアイコンにこの2つを映すこともできる。
+
 <a id="claude-source"></a>
 
 ### Claude の取得元は切り替えられる
@@ -157,6 +169,8 @@ Windows の表示言語に従う。日本語環境なら日本語、それ以外
 |---|---|
 | **「claude から応答がありません」** | `claude` が PATH にない、またはログインしていない。ターミナルで `claude --version` が通るか確かめる |
 | **「codex app-server から応答がありません」** | `codex` が PATH にない、またはログインしていない。`codex app-server` が動くか確かめる |
+| **「agy から応答がありません」「grok から応答がありません」** | ON にしたときだけ出る。同じく PATH とログイン。`QuotaGauge.exe --once` を叩くと `last-fetch.txt` に各 CLI の生の結果が書かれる |
+| **「agy が /quota を実行しませんでした」** | print モードのスラッシュコマンドは agy 1.1.11 以降。`agy update` |
 | **「ログインし直してください（HTTP 401）」** | ②を使っている場合のみ。Claude Code に入り直せば直る（①なら起きない）。<br>失敗が続くあいだは間隔を 3分→6→12→…→60分 と自動で伸ばす。「今すぐ更新」で待機を無視して再試行できる |
 | **Claude の値が古いまま** | ③を使っている。①へ戻す（右クリック →「Claude の取得元」） |
 | **トレイにアイコンが出ない** | Windows 11 は新しいアイコンを `^` の中に入れる。そこからタスクバーへドラッグする |

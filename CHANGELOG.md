@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.3.0 (unreleased)
+
+### Added
+
+- **Optional providers: Antigravity CLI (`agy`) and Grok Build (`grok`).** Off by default; turn
+  them on from the right-click menu ("Also watch") or with `"agy": "on"` / `"grok": "on"` in
+  `config.json`. Both are read the way Claude Code and Codex already are — by asking the CLI itself
+  (`agy --print "/quota"` in print mode, and the `_x.ai/billing` ACP extension over
+  `grok agent stdio`), so no credentials are read and nothing goes over the network from this app.
+  The tray icon can follow either of them.
+- `QuotaGauge.exe --once` fetches every provider one time, writes the result to `last-fetch.txt`
+  and exits. Useful when a provider shows an error and you want to see the raw outcome.
+
+### Changed
+
+- Providers are now fetched in parallel, so a refresh takes as long as the slowest one instead of
+  the sum.
+
 ## 2.2.0
 
 ### Added
