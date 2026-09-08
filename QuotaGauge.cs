@@ -497,8 +497,10 @@ static class CodexApi {
       // 手動リセットの残り回数（Plus の「あと N 回リセット可能」）。応答の外側に付いてくる
       string credits = Json.Object(res, "rateLimitResetCredits");
       double? avail = credits != null ? Json.Num(credits, "availableCount") : null;
-      if (avail.HasValue && avail.Value > 0)
-        p.Note = (p.Note ?? "") + S.T(" ・ リセット残 ", " · resets left ") + (int)avail.Value;
+      if (avail.HasValue && avail.Value > 0) {
+        int n = (int)avail.Value;
+        p.Note = (p.Note ?? "") + (S.Ja ? " ・ リセット残 " + n : " · " + n + (n == 1 ? " reset left" : " resets left"));
+      }
 
       // 主枠とは別に limitId ごとの枠が付く（例: gpt-reserve）。Codex アプリには出ないが、減っていくのは同じ
       string byId = Json.Object(res, "rateLimitsByLimitId");
@@ -957,7 +959,7 @@ class QuotaPanel : Form {
     // 下段＝取得時刻と「更新」
     using (var p = new Pen(Palette.Border)) g.DrawLine(p, 0, Height - FootH, Width, Height - FootH);
     using (var b = new SolidBrush(Palette.Heading))
-      g.DrawString(snap == null ? "" : snap.FetchedAt.ToString("HH:mm") + S.T(" 取得", " fetched"),
+      g.DrawString(snap == null ? "" : (S.Ja ? snap.FetchedAt.ToString("HH:mm") + " 取得" : "Fetched " + snap.FetchedAt.ToString("HH:mm")),
                    fSub, b, Side, Height - FootH + Sc(15));
   }
 
