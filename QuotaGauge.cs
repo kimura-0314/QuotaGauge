@@ -77,14 +77,16 @@ class Limit {
   }
 
   // リングの下に置く形。日付だけ・時刻だけにすると「今日の何時？」「何日の？」と読み直しが要る
+  // サーバーの値は 07:59:59.9Z のように数十ミリ秒手前で返ることがあり、秒を切り捨てると 1分前に見える。
+  // Claude Code 本体と同じく分に丸める
   public string ResetLabel {
-    get { return ResetIsUsable ? ResetsAt.Value.ToString("M/d HH:mm") : ""; }
+    get { return ResetIsUsable ? ResetsAt.Value.AddSeconds(30).ToString("M/d HH:mm") : ""; }
   }
 
   public string Remaining {
     get {
       if (!ResetIsUsable) return "";
-      TimeSpan t = ResetsAt.Value - DateTime.Now;
+      TimeSpan t = ResetsAt.Value.AddSeconds(30) - DateTime.Now;
       // 週次の枠は「167時間」より「6日23時間」の方が読める
       if (t.TotalHours >= 24) return string.Format(S.T("あと {0}日{1}時間", "resets in {0}d {1}h"), t.Days, t.Hours);
       if (t.TotalHours >= 1) return string.Format(S.T("あと {0}時間{1}分", "resets in {0}h {1}m"), (int)t.TotalHours, t.Minutes);
