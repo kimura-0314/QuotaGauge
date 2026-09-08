@@ -80,6 +80,8 @@ class Limit {
     get {
       if (!ResetIsUsable) return "";
       TimeSpan t = ResetsAt.Value - DateTime.Now;
+      // 週次の枠は「167時間」より「6日23時間」の方が読める
+      if (t.TotalHours >= 24) return string.Format(S.T("あと {0}日{1}時間", "resets in {0}d {1}h"), t.Days, t.Hours);
       if (t.TotalHours >= 1) return string.Format(S.T("あと {0}時間{1}分", "resets in {0}h {1}m"), (int)t.TotalHours, t.Minutes);
       return string.Format(S.T("あと {0}分", "resets in {0}m"), Math.Max(1, (int)t.TotalMinutes));
     }
@@ -727,6 +729,7 @@ static class Palette {
   public static readonly Color SubText = Color.FromArgb(71, 85, 105);
   public static readonly Color Heading = Color.FromArgb(100, 116, 139);
   public static readonly Color Track   = Color.FromArgb(241, 245, 249);
+  public static readonly Color Card    = Color.FromArgb(248, 250, 252);   // プロバイダごとの下地。白地よりわずかに沈める
   public static readonly Color BarOk   = Color.FromArgb(100, 116, 139);
   public static readonly Color BarWarn = Color.FromArgb(180, 120, 40);
   public static readonly Color BarCrit = Color.FromArgb(159, 42, 42);
@@ -755,8 +758,18 @@ class QuotaPanel : Form {
   readonly Font fBtn     = new Font("Yu Gothic UI", 9F, FontStyle.Regular);
   Button refreshBtn;
 
-  const int RowH = 60;
-  const int HeadH = 26;
+  // プロバイダごとに1枚のカード。2本のときは平坦でも読めたが、4本並ぶと境目が要る
+  const int RowH = 58;
+  const int HeadH = 24;
+  const int CardPad = 12;      // カード内の左右余白
+  const int CardTop = 10;      // カード上端から見出しまで
+  const int CardBottom = 2;    // 最終行の下（行自体が下に余白を持つ）
+  const int CardGap = 8;       // カード同士の間隔
+  const int Side = 12;         // パネル端からカードまで
+
+  static int CardHeight(Provider p) {
+    return CardTop + HeadH + Math.Max(1, p.Limits.Count) * RowH + CardBottom;
+  }
 
   // フォーカスが外れて隠れた時刻。トレイアイコンでの開閉判定に使う（下の JustHidden）
   DateTime hiddenAt = DateTime.MinValue;
@@ -815,9 +828,14 @@ class QuotaPanel : Form {
     snap = s;
     hiddenAt = DateTime.MinValue;
 
-    int rows = (s != null && s.RowCount > 0) ? s.RowCount : 1;
-    int heads = (s != null) ? s.Providers.Count : 1;
-    Height = 46 + heads * HeadH + rows * RowH + 44;
+    int body = 0;
+    if (s != null && s.Providers.Count > 0) {
+      foreach (var p in s.Providers) body += CardHeight(p) + CardGap;
+      body -= CardGap;
+    } else {
+      body = RowH;                                          // 「読み込み中…」の1行ぶん
+    }
+    Height = 44 + body + 48;
 
     var wa = Screen.FromPoint(anchor).WorkingArea;
     int x = Math.Min(Math.Max(wa.Left + 8, anchor.X - Width / 2), wa.Right - Width - 8);
@@ -843,23 +861,32 @@ class QuotaPanel : Form {
 
     int y = 44;
 
-    if (snap == null) {
+    if (snap == null || snap.Providers.Count == 0) {
       using (var b = new SolidBrush(Palette.SubText))
-        g.DrawString(S.T("読み込み中…", "Loading…"), fLabel, b, 16, y + 8);
+        g.DrawString(snap == null ? S.T("読み込み中…", "Loading…") : S.T("情報なし", "No data"), fLabel, b, 16, y + 8);
     } else {
       foreach (var pv in snap.Providers) {
+        int cardX = Side, cardW = Width - Side * 2, cardH = CardHeight(pv);
+        using (var path = RoundedRect(cardX, y, cardW, cardH, 8)) {
+          using (var b = new SolidBrush(Palette.Card)) g.FillPath(b, path);
+          using (var p = new Pen(Palette.Border))  g.DrawPath(p, path);
+        }
+
+        int x = cardX + CardPad, innerW = cardW - CardPad * 2;
+        int ry = y + CardTop;
         // 値が古いときは見出しの色を変えて、他所の表示とのズレに気づけるようにする
         using (var b = new SolidBrush(pv.IsStale ? Palette.BarWarn : Palette.Heading))
-          g.DrawString(pv.Heading, fHeading, b, 16, y);
-        y += HeadH;
+          g.DrawString(pv.Heading, fHeading, b, x, ry);
+        ry += HeadH;
 
         if (pv.Limits.Count == 0) {
           using (var b = new SolidBrush(Palette.SubText))
-            g.DrawString(pv.Error ?? S.T("情報なし", "No data"), fSub, b, 16, y);
-          y += RowH;
-          continue;
+            g.DrawString(pv.Error ?? S.T("情報なし", "No data"), fSub, b,
+                         new RectangleF(x, ry, innerW, RowH));
+        } else {
+          foreach (var l in pv.Limits) { DrawRow(g, l, x, ry, innerW); ry += RowH; }
         }
-        foreach (var l in pv.Limits) { DrawRow(g, l, y); y += RowH; }
+        y += cardH + CardGap;
       }
     }
 
@@ -868,29 +895,41 @@ class QuotaPanel : Form {
                    fSub, b, 16, Height - 30);
   }
 
-  void DrawRow(Graphics g, Limit l, int y) {
+  static GraphicsPath RoundedRect(int x, int y, int w, int h, int r) {
+    var path = new GraphicsPath();
+    int d = r * 2;
+    path.AddArc(x, y, d, d, 180, 90);
+    path.AddArc(x + w - d, y, d, d, 270, 90);
+    path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+    path.AddArc(x, y + h - d, d, d, 90, 90);
+    path.CloseFigure();
+    return path;
+  }
+
+  void DrawRow(Graphics g, Limit l, int x, int y, int w) {
     using (var b = new SolidBrush(Palette.Text))
-      g.DrawString(l.Label, fLabel, b, 16, y);
+      g.DrawString(l.Label, fLabel, b, x, y);
 
     string pct = l.Percent + "%";
     var size = g.MeasureString(pct, fPct);
     using (var b = new SolidBrush(Palette.BarFor(l)))
-      g.DrawString(pct, fPct, b, Width - 16 - size.Width, y - 4);
+      g.DrawString(pct, fPct, b, x + w - size.Width, y - 4);
 
-    int barY = y + 23, barW = Width - 32, barH = 6;
-    using (var b = new SolidBrush(Palette.Track))
-      g.FillRectangle(b, 16, barY, barW, barH);
-    int fill = (int)Math.Round(barW * Math.Min(100, Math.Max(0, l.Percent)) / 100.0);
+    int barY = y + 23, barH = 6;
+    // 下地がカード色なので、トラックは1段濃い線色にして見えるようにする
+    using (var b = new SolidBrush(Palette.Border))
+      g.FillRectangle(b, x, barY, w, barH);
+    int fill = (int)Math.Round(w * Math.Min(100, Math.Max(0, l.Percent)) / 100.0);
     if (fill > 0)
       using (var b = new SolidBrush(Palette.BarFor(l)))
-        g.FillRectangle(b, 16, barY, fill, barH);
+        g.FillRectangle(b, x, barY, fill, barH);
 
     // 使った量（右上の数字）と、まだ使える量を両方見せる
     string sub = string.Format(S.T("残り {0}%", "{0}% left"), Math.Max(0, 100 - l.Percent));
     if (l.ResetIsUsable)
       sub += S.T(" ・ ", " · ") + l.Remaining + S.T("（", " (") + l.ResetsAt.Value.ToString("M/d HH:mm") + S.T("）", ")");
     using (var b = new SolidBrush(Palette.SubText))
-      g.DrawString(sub, fSub, b, 16, barY + 11);
+      g.DrawString(sub, fSub, b, x, barY + 11);
   }
 }
 
@@ -964,6 +1003,18 @@ class TrayApp : ApplicationContext {
         try { panel.UpdateSnapshot(s); panel.SetBusy(false); } catch { }
         UpdateIcon();
         foreach (var p in s.Providers) LogIfNew(p);
+        // `--preview` … 最初の取得が終わったらパネルを開く（見た目の確認・スクショ用）
+        if (Program.Preview) {
+          Program.Preview = false;
+          try {
+            panel.ShowAt(snap, Cursor.Position);
+            // 描いたものをそのまま PNG に落とす（README のスクショと、見た目の確認に使う）
+            using (var bmp = new Bitmap(panel.Width, panel.Height)) {
+              panel.DrawToBitmap(bmp, new Rectangle(0, 0, panel.Width, panel.Height));
+              bmp.Save(System.IO.Path.Combine(Paths.DataDir, "panel-preview.png"), System.Drawing.Imaging.ImageFormat.Png);
+            }
+          } catch (Exception ex) { Log.Write("Preview: " + ex.Message); }
+        }
       };
       try {
         if (panel.IsHandleCreated) panel.BeginInvoke(apply);
@@ -1262,8 +1313,11 @@ static class Log {
 }
 
 static class Program {
+  public static bool Preview;
+
   [STAThread]
   static void Main(string[] args) {
+    Preview = args.Length > 0 && args[0] == "--preview";
     // `QuotaGauge.exe --once` … 常駐せずに1回だけ取って last-fetch.txt に書いて終わる。
     // 「パネルに何が出るはずか」を目で確かめるための口。トレイをクリックせずに検証できる
     if (args.Length > 0 && args[0] == "--once") {

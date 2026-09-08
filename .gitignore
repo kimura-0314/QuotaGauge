@@ -11,3 +11,4 @@ config.json
 # 作業用バックアップ
 *.bak-*
 last-fetch.txt
+panel-preview.png
