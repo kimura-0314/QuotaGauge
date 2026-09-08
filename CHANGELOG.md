@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.0 (unreleased)
+## 2.3.0
 
 ### Added
 
@@ -10,11 +10,23 @@
   (`agy --print "/quota"` in print mode, and the `_x.ai/billing` ACP extension over
   `grok agent stdio`), so no credentials are read and nothing goes over the network from this app.
   The tray icon can follow either of them.
+- **Codex: Luna Reserve and reset credits.** The same `account/rateLimits/read` call also carries
+  the per-limit quotas (`gpt-reserve`, shown under its documented name Luna Reserve) and
+  `rateLimitResetCredits`, so the Codex heading now says how many manual resets you have left.
 - `QuotaGauge.exe --once` fetches every provider one time, writes the result to `last-fetch.txt`
   and exits. Useful when a provider shows an error and you want to see the raw outcome.
+  `--preview` opens the panel after the first fetch and saves it to `panel-preview.png`.
 
 ### Changed
 
+- **The panel is drawn as rings.** Each window was a heading, a bold percentage, a bar and a
+  sentence repeating the same numbers; with four CLIs that read as a wall of text. Each window is
+  now the same ring the tray icon draws, three to a row, coloured per CLI, with the reset shown as
+  date and time underneath. Colours follow the Google Power Tools side-panel tokens.
+- **Rendered at the real DPI.** The process declares per-monitor DPI awareness, so on a 125% or
+  150% display Windows no longer stretches a 96-dpi bitmap and the panel is sharp.
+- Reset times are rounded to the minute. The server occasionally returns `07:59:59.9Z` for a
+  window that resets at 08:00, which used to display as 16:59 where Claude Code shows 17:00.
 - Providers are now fetched in parallel, so a refresh takes as long as the slowest one instead of
   the sum.
 

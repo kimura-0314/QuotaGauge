@@ -18,7 +18,7 @@ Made by kimura — [X](https://x.com/kimura_0314) · [note](https://note.com/coz
 | Action | |
 |---|---|
 | **Icon** | Draws the tightest window as a ring. Red above 90%, amber above 70% |
-| **Left click** | Opens a panel listing every Claude and Codex window |
+| **Left click** | Opens a panel with one ring per window, grouped by CLI |
 | **Hover** | Shows both usage figures |
 | **Right click** | Refresh now / which provider the icon follows / Claude data source / log / start with Windows / quit |
 
@@ -27,7 +27,9 @@ The panel:
 ![Usage panel](docs/panel-en.png)
 
 It refreshes every 3 minutes. Alongside the 5-hour and weekly windows you also get
-**per-model weekly windows** and your plan name.
+**per-model weekly windows** (Claude), **Luna Reserve** and the number of **rate-limit resets
+you have left** (Codex), and your plan name. Every ring is the same one the tray icon draws,
+coloured per CLI, amber above 70% and red above 90%. Rendered at your display's real DPI.
 
 **You can choose which provider the icon follows** from the right-click menu: whichever is
 tighter (default), Claude Code only, or Codex only. People lean on different tools.
