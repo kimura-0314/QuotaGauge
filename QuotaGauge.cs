@@ -76,13 +76,9 @@ class Limit {
     get { return ResetsAt.HasValue && (ResetsAt.Value - DateTime.Now).TotalSeconds > 0; }
   }
 
-  // リングの下に置く短い形。今日なら時刻、先なら日付
+  // リングの下に置く形。日付だけ・時刻だけにすると「今日の何時？」「何日の？」と読み直しが要る
   public string ResetLabel {
-    get {
-      if (!ResetIsUsable) return "";
-      var r = ResetsAt.Value;
-      return r.Date == DateTime.Now.Date ? r.ToString("HH:mm") : r.ToString("M/d");
-    }
+    get { return ResetIsUsable ? ResetsAt.Value.ToString("M/d HH:mm") : ""; }
   }
 
   public string Remaining {
@@ -753,6 +749,22 @@ static class Palette {
   public static readonly Color IconWarn  = Color.FromArgb(217, 119, 6);
   public static readonly Color IconCrit  = Color.FromArgb(220, 62, 62);
 
+  // リングは CLI ごとの色。全部おなじ灰色だと「どれがどれか」を毎回ラベルで読むことになる
+  public static Color AccentFor(string key) {
+    switch (key) {
+      case "claude": return Color.FromArgb(217, 119, 87);    // Anthropic の赤土
+      case "codex":  return Color.FromArgb(16, 163, 127);    // OpenAI の緑
+      case "agy":    return Color.FromArgb(66, 133, 244);    // Google の青
+      case "grok":   return Color.FromArgb(55, 65, 81);      // xAI の墨
+      default:       return BarOk;
+    }
+  }
+
+  // 未使用部分の輪は、その CLI の色を白に 85% 溶かしたもの
+  public static Color Tint(Color c) {
+    return Color.FromArgb(255 - (255 - c.R) * 15 / 100, 255 - (255 - c.G) * 15 / 100, 255 - (255 - c.B) * 15 / 100);
+  }
+
   public static Color BarFor(Limit l) {
     if (l.IsCritical) return BarCrit;
     if (l.Percent >= 70) return BarWarn;
@@ -773,16 +785,19 @@ class QuotaPanel : Form {
 
   // 枠ごとにトレイと同じリング（円弧）を並べる。文章で3回書いていた同じ情報を、絵1つと数字1つにする。
   // プロバイダは見出し1行＋リングの段（3つ横並び）＋区切り線
-  const int HeadH = 34;        // 見出し行（上の余白込み）
-  const int TileH = 104;       // リング1段
+  // 寸法は 96dpi の値で書き、描くときに倍率を掛ける（フォントは pt 指定なので勝手に付いてくる）
+  float k = 1f;
+  int Sc(int v) { return (int)Math.Round(v * k); }
+  int HeadH      { get { return Sc(34); } }   // 見出し行（上の余白込み）
+  int TileH      { get { return Sc(104); } }  // リング1段
   const int TilesPerRow = 3;
-  const int Side = 16;         // 左右の余白
-  const int Ring = 52;         // リングの直径
-  const int RingStroke = 6;
-  const int FootH = 44;
-  const int ErrH = 40;         // 取れなかったときの1行
+  int Side       { get { return Sc(16); } }   // 左右の余白
+  int Ring       { get { return Sc(52); } }   // リングの直径
+  int RingStroke { get { return Sc(6); } }
+  int FootH      { get { return Sc(44); } }
+  int ErrH       { get { return Sc(40); } }   // 取れなかったときの1行
 
-  static int BlockHeight(Provider p) {
+  int BlockHeight(Provider p) {
     int rows = p.Limits.Count == 0 ? 0 : (p.Limits.Count + TilesPerRow - 1) / TilesPerRow;
     return HeadH + (rows == 0 ? ErrH : rows * TileH) + 1;
   }
@@ -805,8 +820,9 @@ class QuotaPanel : Form {
     TopMost = true;
     StartPosition = FormStartPosition.Manual;
     BackColor = Palette.Bg;
-    Width = 360;
     DoubleBuffered = true;
+    using (var g = CreateGraphics()) k = g.DpiX / 96f;
+    Width = Sc(360);
 
     refreshBtn = new Button();
     refreshBtn.Text = S.T("更新", "Refresh");
@@ -816,7 +832,7 @@ class QuotaPanel : Form {
     refreshBtn.BackColor = Palette.Bg;
     refreshBtn.ForeColor = Palette.SubText;
     refreshBtn.Font = fBtn;
-    refreshBtn.Size = new Size(64, 26);
+    refreshBtn.Size = new Size(Sc(64), Sc(26));
     refreshBtn.Cursor = Cursors.Hand;
     refreshBtn.Click += delegate {
       if (RefreshRequested != null) RefreshRequested(this, EventArgs.Empty);
@@ -848,15 +864,15 @@ class QuotaPanel : Form {
     if (s != null && s.Providers.Count > 0) {
       foreach (var p in s.Providers) body += BlockHeight(p);
     } else {
-      body = ErrH + 8;                                      // 「読み込み中…」の1行ぶん
+      body = ErrH + Sc(8);                                  // 「読み込み中…」の1行ぶん
     }
-    Height = 4 + body + FootH;
+    Height = Sc(4) + body + FootH;
 
     var wa = Screen.FromPoint(anchor).WorkingArea;
     int x = Math.Min(Math.Max(wa.Left + 8, anchor.X - Width / 2), wa.Right - Width - 8);
     Location = new Point(x, wa.Bottom - Height - 8);
 
-    refreshBtn.Location = new Point(Width - refreshBtn.Width - 16, Height - refreshBtn.Height - 12);
+    refreshBtn.Location = new Point(Width - refreshBtn.Width - Side, Height - refreshBtn.Height - (FootH - refreshBtn.Height) / 2);
 
     Invalidate();
     Show();
@@ -871,12 +887,12 @@ class QuotaPanel : Form {
     using (var p = new Pen(Palette.BorderStrong))
       g.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
 
-    int y = 4;
+    int y = Sc(4);
 
     if (snap == null || snap.Providers.Count == 0) {
       using (var b = new SolidBrush(Palette.SubText))
-        g.DrawString(snap == null ? S.T("読み込み中…", "Loading…") : S.T("情報なし", "No data"), fLabel, b, Side, y + 14);
-      y += ErrH + 8;
+        g.DrawString(snap == null ? S.T("読み込み中…", "Loading…") : S.T("情報なし", "No data"), fLabel, b, Side, y + Sc(14));
+      y += ErrH + Sc(8);
     } else {
       bool first = true;
       foreach (var pv in snap.Providers) {
@@ -885,15 +901,15 @@ class QuotaPanel : Form {
         first = false;
 
         // 見出し＝名前（濃い・太字）と、プラン・鮮度（薄い・右寄せ）
-        int hy = y + 12;
+        int hy = y + Sc(12);
         using (var b = new SolidBrush(Palette.Text))
-          g.DrawString(pv.Name, fHeading, b, Side - 2, hy);
+          g.DrawString(pv.Name, fHeading, b, Side - Sc(2), hy);
         string right = pv.Note ?? "";
         if (pv.DataTime.HasValue) right += (right.Length > 0 ? S.T(" ・ ", " · ") : "") + pv.Freshness;
         if (right.Length > 0) {
           var sz = g.MeasureString(right, fSub);
           using (var b = new SolidBrush(pv.IsStale ? Palette.BarWarn : Palette.Heading))
-            g.DrawString(right, fSub, b, Width - Side - sz.Width + 2, hy + 2);
+            g.DrawString(right, fSub, b, Width - Side - sz.Width + Sc(2), hy + Sc(2));
         }
         y += HeadH;
 
@@ -906,7 +922,7 @@ class QuotaPanel : Form {
           int tileW = (Width - Side * 2) / TilesPerRow;
           for (int i = 0; i < pv.Limits.Count; i++) {
             int col = i % TilesPerRow, row = i / TilesPerRow;
-            DrawTile(g, pv.Limits[i], Side + col * tileW, y + row * TileH, tileW);
+            DrawTile(g, pv.Limits[i], Palette.AccentFor(pv.Key), Side + col * tileW, y + row * TileH, tileW);
           }
           y += ((pv.Limits.Count + TilesPerRow - 1) / TilesPerRow) * TileH;
         }
@@ -918,18 +934,21 @@ class QuotaPanel : Form {
     using (var p = new Pen(Palette.Border)) g.DrawLine(p, 0, Height - FootH, Width, Height - FootH);
     using (var b = new SolidBrush(Palette.Heading))
       g.DrawString(snap == null ? "" : snap.FetchedAt.ToString("HH:mm") + S.T(" 取得", " fetched"),
-                   fSub, b, Side, Height - FootH + 15);
+                   fSub, b, Side, Height - FootH + Sc(15));
   }
 
   // リング1つ＝円弧・中の%・下にラベルとリセット
-  void DrawTile(Graphics g, Limit l, int x, int y, int w) {
+  void DrawTile(Graphics g, Limit l, Color accent, int x, int y, int w) {
     int cx = x + w / 2;
-    var rect = new Rectangle(cx - Ring / 2 + RingStroke / 2, y + 10 + RingStroke / 2, Ring - RingStroke, Ring - RingStroke);
-    using (var track = new Pen(Palette.Track, RingStroke))
+    int top = y + Sc(10);
+    var rect = new Rectangle(cx - Ring / 2 + RingStroke / 2, top + RingStroke / 2, Ring - RingStroke, Ring - RingStroke);
+    // 輪の色＝その CLI の色。90% を超えたら赤、70% を超えたら琥珀で「そろそろ」を知らせる
+    Color ring = l.IsCritical ? Palette.BarCrit : (l.Percent >= 70 ? Palette.BarWarn : accent);
+    using (var track = new Pen(Palette.Tint(ring), RingStroke))
       g.DrawEllipse(track, rect);
     int pct = Math.Min(100, Math.Max(0, l.Percent));
     if (pct > 0)
-      using (var pen = new Pen(Palette.BarFor(l), RingStroke)) {
+      using (var pen = new Pen(ring, RingStroke)) {
         if (pct < 100) { pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; }
         g.DrawArc(pen, rect, -90, 360f * pct / 100f);
       }
@@ -938,12 +957,12 @@ class QuotaPanel : Form {
     using (var b = new SolidBrush(l.IsCritical ? Palette.BarCrit : (l.Percent >= 70 ? Palette.BarWarn : Palette.Text)))
       g.DrawString(l.Percent + "%", fPct, b, new RectangleF(rect.X, rect.Y, rect.Width, rect.Height), center);
 
-    var top = new StringFormat { Alignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+    var fmt = new StringFormat { Alignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
     using (var b = new SolidBrush(Palette.SubText))
-      g.DrawString(l.Label, fSub, b, new RectangleF(x, y + 10 + Ring + 6, w, 16), top);
+      g.DrawString(l.Label, fSub, b, new RectangleF(x, top + Ring + Sc(6), w, Sc(16)), fmt);
     if (l.ResetIsUsable)
       using (var b = new SolidBrush(Palette.Heading))
-        g.DrawString(l.ResetLabel, fTiny, b, new RectangleF(x, y + 10 + Ring + 22, w, 14), top);
+        g.DrawString(l.ResetLabel, fTiny, b, new RectangleF(x, top + Ring + Sc(22), w, Sc(14)), fmt);
   }
 }
 
@@ -1329,9 +1348,16 @@ static class Log {
 static class Program {
   public static bool Preview;
 
+  [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
+  [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+
   [STAThread]
   static void Main(string[] args) {
     Preview = args.Length > 0 && args[0] == "--preview";
+
+    // 125% や 150% の画面で、非対応のまま描くと Windows が絵を引き伸ばしてぼやける。
+    // 自分で実ピクセルに描く。Per-Monitor v2（Win10 1703+）→ 駄目なら System DPI
+    try { if (!SetProcessDpiAwarenessContext((IntPtr)(-4))) SetProcessDPIAware(); } catch { try { SetProcessDPIAware(); } catch { } }
     // `QuotaGauge.exe --once` … 常駐せずに1回だけ取って last-fetch.txt に書いて終わる。
     // 「パネルに何が出るはずか」を目で確かめるための口。トレイをクリックせずに検証できる
     if (args.Length > 0 && args[0] == "--once") {
