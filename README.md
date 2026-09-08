@@ -20,7 +20,7 @@ Made by kimura — [X](https://x.com/kimura_0314) · [note](https://note.com/coz
 | **Icon** | Draws the tightest window as a ring. Red above 90%, amber above 70% |
 | **Left click** | Opens a panel with one ring per window, grouped by CLI |
 | **Hover** | Shows both usage figures |
-| **Right click** | Refresh now / which provider the icon follows / Claude data source / log / start with Windows / quit |
+| **Right click** | Refresh now / which provider the icon follows / also watch agy & grok / Claude data source / log / start with Windows / quit |
 
 The panel:
 
