@@ -509,6 +509,8 @@ static class CodexApi {
           string other = Json.Object(byId, id);
           if (other == null) continue;
           string name = Json.Str(other, "limitName") ?? id;
+          // API 内部名ではなく、OpenAI ヘルプにある呼び名で出す（gpt-reserve = Luna Reserve）
+          if (name == "gpt-reserve") name = "Luna Reserve";
           Add(p, Json.Object(other, "primary"), name);
           Add(p, Json.Object(other, "secondary"), name);
         }
