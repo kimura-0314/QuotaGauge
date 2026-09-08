@@ -76,6 +76,15 @@ class Limit {
     get { return ResetsAt.HasValue && (ResetsAt.Value - DateTime.Now).TotalSeconds > 0; }
   }
 
+  // リングの下に置く短い形。今日なら時刻、先なら日付
+  public string ResetLabel {
+    get {
+      if (!ResetIsUsable) return "";
+      var r = ResetsAt.Value;
+      return r.Date == DateTime.Now.Date ? r.ToString("HH:mm") : r.ToString("M/d");
+    }
+  }
+
   public string Remaining {
     get {
       if (!ResetIsUsable) return "";
@@ -104,6 +113,8 @@ class Provider {
       return s;
     }
   }
+
+  public string Freshness { get { return DataTime.HasValue ? Ago(DataTime.Value) : ""; } }
 
   // 値が古いほど、他所の表示とズレる。何分前かを見せておく
   public bool IsStale {
@@ -633,7 +644,8 @@ static class AgyApi {
           var l = new Limit { Percent = (int)Math.Round((1 - rem.Value) * 100) };
           l.Severity = l.Percent >= 90 ? "critical" : "normal";
           string win = Json.Str(b, "window") ?? "";
-          l.Label = (win == "weekly" ? S.T("週次（", "Weekly (") : S.T("枠（", "Limit (")) + shortName + S.T("）", ")");
+          // リングの下は幅が狭い。週次しか無いので「週次」は書かず、モデル群の名前だけにする
+          l.Label = win == "weekly" ? shortName : shortName + " (" + win + ")";
           l.ResetsAt = Json.Iso(b, "reset_time");
           p.Limits.Add(l);
         }
@@ -723,16 +735,17 @@ static class Usage {
 
 // ------------------------------------------------------------------ 配色
 static class Palette {
-  public static readonly Color Bg      = Color.FromArgb(255, 255, 255);
-  public static readonly Color Border  = Color.FromArgb(226, 232, 240);
-  public static readonly Color Text    = Color.FromArgb(15, 23, 42);
-  public static readonly Color SubText = Color.FromArgb(71, 85, 105);
-  public static readonly Color Heading = Color.FromArgb(100, 116, 139);
-  public static readonly Color Track   = Color.FromArgb(241, 245, 249);
-  public static readonly Color Card    = Color.FromArgb(248, 250, 252);   // プロバイダごとの下地。白地よりわずかに沈める
-  public static readonly Color BarOk   = Color.FromArgb(100, 116, 139);
-  public static readonly Color BarWarn = Color.FromArgb(180, 120, 40);
-  public static readonly Color BarCrit = Color.FromArgb(159, 42, 42);
+  // 毎日開く常駐UIなので独自の配色に振らず、Google Power Tools の sidepanel.css と同じトークンを使う
+  public static readonly Color Bg           = Color.FromArgb(255, 255, 255);   // --surface
+  public static readonly Color Border       = Color.FromArgb(235, 235, 235);   // --border (黒 8%)
+  public static readonly Color BorderStrong = Color.FromArgb(217, 217, 217);   // --border-strong (黒 15%)
+  public static readonly Color Text         = Color.FromArgb(24, 24, 27);      // --text
+  public static readonly Color SubText      = Color.FromArgb(95, 99, 104);     // --text-muted
+  public static readonly Color Heading      = Color.FromArgb(128, 134, 139);   // --text-faint
+  public static readonly Color Track        = Color.FromArgb(238, 238, 240);   // --surface-2
+  public static readonly Color BarOk        = Color.FromArgb(95, 99, 104);     // --text-muted
+  public static readonly Color BarWarn      = Color.FromArgb(180, 83, 9);      // --warning
+  public static readonly Color BarCrit      = Color.FromArgb(236, 64, 47);     // --danger
 
   // トレイアイコン用。タスクバーが明色でも暗色でも輪郭が残るよう彩度を上げてある
   public static readonly Color IconTrack = Color.FromArgb(125, 135, 150);
@@ -750,25 +763,28 @@ static class Palette {
 // ------------------------------------------------------------------ パネル
 class QuotaPanel : Form {
   Snapshot snap;
-  readonly Font fTitle   = new Font("Yu Gothic UI", 10F, FontStyle.Bold);
-  readonly Font fHeading = new Font("Yu Gothic UI", 8.5F, FontStyle.Bold);
+  readonly Font fHeading = new Font("Yu Gothic UI", 9.5F, FontStyle.Bold);
   readonly Font fLabel   = new Font("Yu Gothic UI", 9.5F, FontStyle.Regular);
-  readonly Font fPct     = new Font("Yu Gothic UI", 13F, FontStyle.Bold);
+  readonly Font fPct     = new Font("Segoe UI", 9.5F, FontStyle.Bold);       // リングの中の数字
   readonly Font fSub     = new Font("Yu Gothic UI", 8.5F, FontStyle.Regular);
+  readonly Font fTiny    = new Font("Segoe UI", 8F, FontStyle.Regular);
   readonly Font fBtn     = new Font("Yu Gothic UI", 9F, FontStyle.Regular);
   Button refreshBtn;
 
-  // プロバイダごとに1枚のカード。2本のときは平坦でも読めたが、4本並ぶと境目が要る
-  const int RowH = 58;
-  const int HeadH = 24;
-  const int CardPad = 12;      // カード内の左右余白
-  const int CardTop = 10;      // カード上端から見出しまで
-  const int CardBottom = 2;    // 最終行の下（行自体が下に余白を持つ）
-  const int CardGap = 8;       // カード同士の間隔
-  const int Side = 12;         // パネル端からカードまで
+  // 枠ごとにトレイと同じリング（円弧）を並べる。文章で3回書いていた同じ情報を、絵1つと数字1つにする。
+  // プロバイダは見出し1行＋リングの段（3つ横並び）＋区切り線
+  const int HeadH = 34;        // 見出し行（上の余白込み）
+  const int TileH = 104;       // リング1段
+  const int TilesPerRow = 3;
+  const int Side = 16;         // 左右の余白
+  const int Ring = 52;         // リングの直径
+  const int RingStroke = 6;
+  const int FootH = 44;
+  const int ErrH = 40;         // 取れなかったときの1行
 
-  static int CardHeight(Provider p) {
-    return CardTop + HeadH + Math.Max(1, p.Limits.Count) * RowH + CardBottom;
+  static int BlockHeight(Provider p) {
+    int rows = p.Limits.Count == 0 ? 0 : (p.Limits.Count + TilesPerRow - 1) / TilesPerRow;
+    return HeadH + (rows == 0 ? ErrH : rows * TileH) + 1;
   }
 
   // フォーカスが外れて隠れた時刻。トレイアイコンでの開閉判定に使う（下の JustHidden）
@@ -795,7 +811,7 @@ class QuotaPanel : Form {
     refreshBtn = new Button();
     refreshBtn.Text = S.T("更新", "Refresh");
     refreshBtn.FlatStyle = FlatStyle.Flat;
-    refreshBtn.FlatAppearance.BorderColor = Palette.Border;
+    refreshBtn.FlatAppearance.BorderColor = Palette.BorderStrong;
     refreshBtn.FlatAppearance.BorderSize = 1;
     refreshBtn.BackColor = Palette.Bg;
     refreshBtn.ForeColor = Palette.SubText;
@@ -830,12 +846,11 @@ class QuotaPanel : Form {
 
     int body = 0;
     if (s != null && s.Providers.Count > 0) {
-      foreach (var p in s.Providers) body += CardHeight(p) + CardGap;
-      body -= CardGap;
+      foreach (var p in s.Providers) body += BlockHeight(p);
     } else {
-      body = RowH;                                          // 「読み込み中…」の1行ぶん
+      body = ErrH + 8;                                      // 「読み込み中…」の1行ぶん
     }
-    Height = 44 + body + 48;
+    Height = 4 + body + FootH;
 
     var wa = Screen.FromPoint(anchor).WorkingArea;
     int x = Math.Min(Math.Max(wa.Left + 8, anchor.X - Width / 2), wa.Right - Width - 8);
@@ -853,83 +868,82 @@ class QuotaPanel : Form {
     g.SmoothingMode = SmoothingMode.AntiAlias;
     g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-    using (var p = new Pen(Palette.Border))
+    using (var p = new Pen(Palette.BorderStrong))
       g.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
 
-    using (var b = new SolidBrush(Palette.Text))
-      g.DrawString(S.T("利用枠", "Usage"), fTitle, b, 16, 14);
-
-    int y = 44;
+    int y = 4;
 
     if (snap == null || snap.Providers.Count == 0) {
       using (var b = new SolidBrush(Palette.SubText))
-        g.DrawString(snap == null ? S.T("読み込み中…", "Loading…") : S.T("情報なし", "No data"), fLabel, b, 16, y + 8);
+        g.DrawString(snap == null ? S.T("読み込み中…", "Loading…") : S.T("情報なし", "No data"), fLabel, b, Side, y + 14);
+      y += ErrH + 8;
     } else {
+      bool first = true;
       foreach (var pv in snap.Providers) {
-        int cardX = Side, cardW = Width - Side * 2, cardH = CardHeight(pv);
-        using (var path = RoundedRect(cardX, y, cardW, cardH, 8)) {
-          using (var b = new SolidBrush(Palette.Card)) g.FillPath(b, path);
-          using (var p = new Pen(Palette.Border))  g.DrawPath(p, path);
-        }
+        if (!first)
+          using (var p = new Pen(Palette.Border)) g.DrawLine(p, Side, y, Width - Side, y);
+        first = false;
 
-        int x = cardX + CardPad, innerW = cardW - CardPad * 2;
-        int ry = y + CardTop;
-        // 値が古いときは見出しの色を変えて、他所の表示とのズレに気づけるようにする
-        using (var b = new SolidBrush(pv.IsStale ? Palette.BarWarn : Palette.Heading))
-          g.DrawString(pv.Heading, fHeading, b, x, ry);
-        ry += HeadH;
+        // 見出し＝名前（濃い・太字）と、プラン・鮮度（薄い・右寄せ）
+        int hy = y + 12;
+        using (var b = new SolidBrush(Palette.Text))
+          g.DrawString(pv.Name, fHeading, b, Side - 2, hy);
+        string right = pv.Note ?? "";
+        if (pv.DataTime.HasValue) right += (right.Length > 0 ? S.T(" ・ ", " · ") : "") + pv.Freshness;
+        if (right.Length > 0) {
+          var sz = g.MeasureString(right, fSub);
+          using (var b = new SolidBrush(pv.IsStale ? Palette.BarWarn : Palette.Heading))
+            g.DrawString(right, fSub, b, Width - Side - sz.Width + 2, hy + 2);
+        }
+        y += HeadH;
 
         if (pv.Limits.Count == 0) {
           using (var b = new SolidBrush(Palette.SubText))
             g.DrawString(pv.Error ?? S.T("情報なし", "No data"), fSub, b,
-                         new RectangleF(x, ry, innerW, RowH));
+                         new RectangleF(Side, y, Width - Side * 2, ErrH));
+          y += ErrH;
         } else {
-          foreach (var l in pv.Limits) { DrawRow(g, l, x, ry, innerW); ry += RowH; }
+          int tileW = (Width - Side * 2) / TilesPerRow;
+          for (int i = 0; i < pv.Limits.Count; i++) {
+            int col = i % TilesPerRow, row = i / TilesPerRow;
+            DrawTile(g, pv.Limits[i], Side + col * tileW, y + row * TileH, tileW);
+          }
+          y += ((pv.Limits.Count + TilesPerRow - 1) / TilesPerRow) * TileH;
         }
-        y += cardH + CardGap;
+        y += 1;
       }
     }
 
+    // 下段＝取得時刻と「更新」
+    using (var p = new Pen(Palette.Border)) g.DrawLine(p, 0, Height - FootH, Width, Height - FootH);
+    using (var b = new SolidBrush(Palette.Heading))
+      g.DrawString(snap == null ? "" : snap.FetchedAt.ToString("HH:mm") + S.T(" 取得", " fetched"),
+                   fSub, b, Side, Height - FootH + 15);
+  }
+
+  // リング1つ＝円弧・中の%・下にラベルとリセット
+  void DrawTile(Graphics g, Limit l, int x, int y, int w) {
+    int cx = x + w / 2;
+    var rect = new Rectangle(cx - Ring / 2 + RingStroke / 2, y + 10 + RingStroke / 2, Ring - RingStroke, Ring - RingStroke);
+    using (var track = new Pen(Palette.Track, RingStroke))
+      g.DrawEllipse(track, rect);
+    int pct = Math.Min(100, Math.Max(0, l.Percent));
+    if (pct > 0)
+      using (var pen = new Pen(Palette.BarFor(l), RingStroke)) {
+        if (pct < 100) { pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; }
+        g.DrawArc(pen, rect, -90, 360f * pct / 100f);
+      }
+
+    var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+    using (var b = new SolidBrush(l.IsCritical ? Palette.BarCrit : (l.Percent >= 70 ? Palette.BarWarn : Palette.Text)))
+      g.DrawString(l.Percent + "%", fPct, b, new RectangleF(rect.X, rect.Y, rect.Width, rect.Height), center);
+
+    var top = new StringFormat { Alignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
     using (var b = new SolidBrush(Palette.SubText))
-      g.DrawString(snap == null ? "" : S.T("最終取得 ", "Updated ") + snap.FetchedAt.ToString("HH:mm:ss"),
-                   fSub, b, 16, Height - 30);
-  }
-
-  static GraphicsPath RoundedRect(int x, int y, int w, int h, int r) {
-    var path = new GraphicsPath();
-    int d = r * 2;
-    path.AddArc(x, y, d, d, 180, 90);
-    path.AddArc(x + w - d, y, d, d, 270, 90);
-    path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
-    path.AddArc(x, y + h - d, d, d, 90, 90);
-    path.CloseFigure();
-    return path;
-  }
-
-  void DrawRow(Graphics g, Limit l, int x, int y, int w) {
-    using (var b = new SolidBrush(Palette.Text))
-      g.DrawString(l.Label, fLabel, b, x, y);
-
-    string pct = l.Percent + "%";
-    var size = g.MeasureString(pct, fPct);
-    using (var b = new SolidBrush(Palette.BarFor(l)))
-      g.DrawString(pct, fPct, b, x + w - size.Width, y - 4);
-
-    int barY = y + 23, barH = 6;
-    // 下地がカード色なので、トラックは1段濃い線色にして見えるようにする
-    using (var b = new SolidBrush(Palette.Border))
-      g.FillRectangle(b, x, barY, w, barH);
-    int fill = (int)Math.Round(w * Math.Min(100, Math.Max(0, l.Percent)) / 100.0);
-    if (fill > 0)
-      using (var b = new SolidBrush(Palette.BarFor(l)))
-        g.FillRectangle(b, x, barY, fill, barH);
-
-    // 使った量（右上の数字）と、まだ使える量を両方見せる
-    string sub = string.Format(S.T("残り {0}%", "{0}% left"), Math.Max(0, 100 - l.Percent));
+      g.DrawString(l.Label, fSub, b, new RectangleF(x, y + 10 + Ring + 6, w, 16), top);
     if (l.ResetIsUsable)
-      sub += S.T(" ・ ", " · ") + l.Remaining + S.T("（", " (") + l.ResetsAt.Value.ToString("M/d HH:mm") + S.T("）", ")");
-    using (var b = new SolidBrush(Palette.SubText))
-      g.DrawString(sub, fSub, b, x, barY + 11);
+      using (var b = new SolidBrush(Palette.Heading))
+        g.DrawString(l.ResetLabel, fTiny, b, new RectangleF(x, y + 10 + Ring + 22, w, 14), top);
   }
 }
 
