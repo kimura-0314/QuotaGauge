@@ -642,6 +642,54 @@ static class Subprocess {
   }
 }
 
+// 見えないデスクトップでコマンドを動かし、出力を一時ファイル経由で受け取る。
+// そのデスクトップに出た窓（孫プロセスの cmd / conhost も含む）は画面に一切映らない
+static class HiddenDesktop {
+  const string DesktopName = "QuotaGaugeHidden";
+  static IntPtr desk = IntPtr.Zero;
+
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  struct STARTUPINFO {
+    public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+    public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+    public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern IntPtr CreateDesktop(string name, IntPtr device, IntPtr devmode, int flags, uint access, IntPtr sa);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool CreateProcess(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit,
+                                   uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+
+  public static string RunCapture(string command, Predicate<string> match, int timeoutMs) {
+    if (desk == IntPtr.Zero) desk = CreateDesktop(DesktopName, IntPtr.Zero, IntPtr.Zero, 0, 0x10000000 /*GENERIC_ALL*/, IntPtr.Zero);
+    if (desk == IntPtr.Zero) return null;
+    string tmp = Path.Combine(Path.GetTempPath(), "quotagauge-" + Guid.NewGuid().ToString("N") + ".txt");
+    var si = new STARTUPINFO();
+    si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+    si.lpDesktop = DesktopName;
+    var cmd = new StringBuilder("cmd.exe /c " + command + " > \"" + tmp + "\" 2>nul");
+    PROCESS_INFORMATION pi;
+    if (!CreateProcess(null, cmd, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, Paths.WorkDir, ref si, out pi)) return null;
+    try {
+      if (WaitForSingleObject(pi.hProcess, (uint)timeoutMs) != 0) {
+        try { Process.Start(new ProcessStartInfo("taskkill", "/T /F /PID " + pi.dwProcessId) { CreateNoWindow = true, UseShellExecute = false }); } catch { }
+        return null;
+      }
+      if (!File.Exists(tmp)) return null;
+      foreach (var l in File.ReadAllLines(tmp, Encoding.UTF8)) if (match(l)) return l;
+      return null;
+    } finally {
+      CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+      try { File.Delete(tmp); } catch { }
+    }
+  }
+}
+
 // ------------------------------------------------------------------ agy（Antigravity CLI）
 // print モードは読み取り専用のスラッシュコマンドに「turn を起こさず」答える（agy 1.1.11 以降）。
 // `/quota` は週次のグループ（Gemini 系／Claude・GPT 系）ごとに remaining_fraction と reset_time を返す。
@@ -650,8 +698,10 @@ static class AgyApi {
   public static Provider Fetch() {
     var p = new Provider { Key = "agy", Name = "Antigravity" };
     try {
-      string res = Subprocess.ReadUntil("cmd.exe", "/c agy --output-format json --print /quota",
-                                        new string[0], delegate (string l) { return l.Contains("\"groups\""); }, 40000);
+      // agy は起動のたびに MCP サーバーを cmd /c npx … で立ち上げ、それが一瞬黒い窓を出す。
+      // CreateNoWindow は孫プロセスまで届かないので、見えないデスクトップ上で丸ごと動かす
+      string res = HiddenDesktop.RunCapture("agy --output-format json --print /quota",
+                                            delegate (string l) { return l.Contains("\"groups\""); }, 40000);
       if (res == null) { p.Error = S.T("agy から応答がありません（PATH とログイン状態を確認）", "No response from agy (check your PATH and that you are signed in)"); return p; }
       // turn が走ったなら /quota として扱われていない
       if ((Json.Num(res, "num_turns") ?? 0) > 0) { p.Error = S.T("agy が /quota を実行しませんでした（版が古い？）", "agy did not answer /quota (old version?)"); return p; }
