@@ -32,7 +32,7 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyTitle("QuotaGauge")]
+[assembly: System.Reflection.AssemblyTitle("残量チラ見 (QuotaGauge)")]
 [assembly: System.Reflection.AssemblyProduct("QuotaGauge")]
 [assembly: System.Reflection.AssemblyDescription("Shows Claude Code and Codex quota in the notification area")]
 [assembly: System.Reflection.AssemblyCompany("kimura")]
@@ -1204,7 +1204,13 @@ class TrayApp : ApplicationContext {
   void BuildMenu(object sender, System.ComponentModel.CancelEventArgs e) {
     menu.Items.Clear();
 
-    var open = new ToolStripMenuItem(S.T("利用枠を見る", "Show usage"));
+    // トレイのツールチップは取得後に数字へ置き換わるので、名前はメニューの頭で見せる
+    var title = new ToolStripMenuItem(S.T("残量チラ見", "QuotaGauge"));
+    title.Enabled = false;
+    menu.Items.Add(title);
+    menu.Items.Add(new ToolStripSeparator());
+
+    var open =new ToolStripMenuItem(S.T("利用枠を見る", "Show usage"));
     open.Click += delegate { panel.ShowAt(snap, Cursor.Position); };
     menu.Items.Add(open);
 
