@@ -37,8 +37,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Shows Claude Code and Codex quota in the notification area")]
 [assembly: System.Reflection.AssemblyCompany("kimura")]
 [assembly: System.Reflection.AssemblyCopyright("MIT License")]
-[assembly: System.Reflection.AssemblyVersion("2.3.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.3.1.0")]
+[assembly: System.Reflection.AssemblyVersion("2.3.2.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.3.2.0")]
 
 namespace QuotaGauge {
 
@@ -211,6 +211,22 @@ static class Json {
     return null;
   }
 
+  // "key": { ... } の中身を括弧の対応で切り出す。null や値が無ければ null
+  public static string Obj(string json, string key) {
+    var m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\\{");
+    if (!m.Success) return null;
+    int open = m.Index + m.Length - 1, depth = 0;
+    bool inStr = false;
+    for (int i = open; i < json.Length; i++) {
+      char c = json[i];
+      if (inStr) { if (c == '\\') i++; else if (c == '"') inStr = false; continue; }
+      if (c == '"') inStr = true;
+      else if (c == '{') depth++;
+      else if (c == '}' && --depth == 0) return json.Substring(open, i - open + 1);
+    }
+    return null;
+  }
+
   // オブジェクト配列を要素ごとの文字列に切り出す
   public static List<string> Objects(string json, string key) {
     var list = new List<string>();
@@ -276,7 +292,11 @@ static class ClaudeApi {
       p.Note = Json.Str(res, "subscription_type");
       ParseLimits(p, res);
       p.DataTime = DateTime.Now;
-      if (p.Limits.Count == 0) p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
+      if (p.Limits.Count == 0) {
+        p.Error = S.T("利用枠の情報が空でした", "The usage data was empty");
+        // 返事の形がまた変わった時に原因を追えるよう、頭だけ残す
+        Log.Write("Claude get_usage raw: " + (res.Length > 600 ? res.Substring(0, 600) : res));
+      }
     } catch (Exception ex) {
       p.Error = ex.Message;
     }
@@ -303,7 +323,8 @@ static class ClaudeApi {
     try {
       proc = Process.Start(psi);
       proc.StandardInput.WriteLine(
-        "{\"type\":\"control_request\",\"request_id\":\"1\",\"request\":{\"subtype\":\"get_usage\"}}");
+        // skip_behaviors＝直近7日の会話ログを全部読む集計を飛ばす。付けないと 2.1.303 では1分を超えて取りこぼす
+        "{\"type\":\"control_request\",\"request_id\":\"1\",\"request\":{\"subtype\":\"get_usage\",\"skip_behaviors\":true}}");
       proc.StandardInput.Flush();
       proc.StandardInput.Close();
 
@@ -346,6 +367,28 @@ static class ClaudeApi {
 
       p.Limits.Add(l);
     }
+    if (p.Limits.Count > 0) return;
+
+    // 2.1.303 は "limits" の配列を付けない返事が混ざる。その時は rate_limits の各枠から読む
+    string rl = Json.Obj(body, "rate_limits");
+    if (rl == null) return;
+    AddRateLimit(p, rl, "five_hour",        S.T("5時間枠", "5-hour"));
+    AddRateLimit(p, rl, "seven_day",        S.T("週次（全体）", "Weekly (all)"));
+    AddRateLimit(p, rl, "seven_day_opus",   S.T("週次（Opus）", "Weekly (Opus)"));
+    AddRateLimit(p, rl, "seven_day_sonnet", S.T("週次（Sonnet）", "Weekly (Sonnet)"));
+  }
+
+  static void AddRateLimit(Provider p, string rl, string key, string label) {
+    string o = Json.Obj(rl, key);
+    if (o == null) return;
+    double? u = Json.Num(o, "utilization");
+    if (!u.HasValue) return;
+    var l = new Limit();
+    l.Label = label;
+    l.Percent = (int)Math.Round(u.Value);
+    l.Severity = l.Percent >= 90 ? "critical" : "normal";
+    l.ResetsAt = Json.Iso(o, "resets_at");
+    p.Limits.Add(l);
   }
 
   // --- もう一方：同じ問い合わせ先を自分で直接叩く -------------------------------

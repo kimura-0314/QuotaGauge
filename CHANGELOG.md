@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.2
+
+### Fixed
+
+- **Claude usage stopped showing with Claude Code 2.1.303.** `get_usage` now scans the last seven
+  days of transcripts before answering, which often took longer than the 60-second wait. The
+  request now sends `skip_behaviors: true`, which skips that scan (answers in about 20–40 seconds,
+  most of it Claude Code starting up).
+- Some answers no longer carry the `limits` list. When it is missing, the 5-hour and weekly
+  windows are read from `rate_limits` instead.
+- When the answer has no usable windows, the first 600 characters are written to the log.
+
 ## 2.3.1
 
 ### Changed
