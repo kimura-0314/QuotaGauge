@@ -1065,7 +1065,7 @@ class TrayApp : ApplicationContext {
     // 取得が終わるまでの一瞬と、描画に失敗したときの拠り所。exe に埋めたリングを使う
     try { ni.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
     catch { ni.Icon = SystemIcons.Application; }
-    ni.Text = S.T("利用枠ゲージ", "QuotaGauge");
+    ni.Text = S.T("残量チラ見", "QuotaGauge");
     ni.ContextMenuStrip = menu;
     ni.Visible = true;
     ni.MouseClick += OnClick;
@@ -1190,7 +1190,7 @@ class TrayApp : ApplicationContext {
           if (sb.Length > 0) sb.Append("\r\n");
           sb.Append(p.Name + " " + worst + "%");
         }
-      string tip = sb.Length == 0 ? S.T("利用枠ゲージ", "QuotaGauge") : sb.ToString();
+      string tip = sb.Length == 0 ? S.T("残量チラ見", "QuotaGauge") : sb.ToString();
       ni.Text = tip.Length > 62 ? tip.Substring(0, 62) : tip;
     } catch (Exception ex) { Log.Write("UpdateIcon: " + ex.Message); }
   }

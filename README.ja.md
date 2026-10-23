@@ -1,4 +1,4 @@
-# QuotaGauge
+# 残量チラ見（QuotaGauge）
 
 [English](README.md) ・ 日本語
 
