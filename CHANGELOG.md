@@ -8,8 +8,10 @@
   days of transcripts before answering, which often took longer than the 60-second wait. The
   request now sends `skip_behaviors: true`, which skips that scan (answers in about 20–40 seconds,
   most of it Claude Code starting up).
-- Some answers no longer carry the `limits` list. When it is missing, the 5-hour and weekly
-  windows are read from `rate_limits` instead.
+- Some answers no longer carry the `limits` list. When it is missing, the 5-hour, weekly and
+  per-model weekly windows are read from `rate_limits` (including `model_scoped`) instead.
+- JSON reading no longer picks up a nested key of the same name, or a later array when a value
+  is `null`.
 - When the answer has no usable windows, the first 600 characters are written to the log.
 
 ## 2.3.1
