@@ -37,8 +37,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("Shows Claude Code and Codex quota in the notification area")]
 [assembly: System.Reflection.AssemblyCompany("kimura")]
 [assembly: System.Reflection.AssemblyCopyright("MIT License")]
-[assembly: System.Reflection.AssemblyVersion("2.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.3.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.3.1.0")]
 
 namespace QuotaGauge {
 

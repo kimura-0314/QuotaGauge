@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.1
+
+### Changed
+
+- **Japanese name is now 残量チラ見** (was 利用枠ゲージ). It shows in the tray tooltip, as the first
+  line of the right-click menu, and in the file description. The English name, the exe name, the
+  config folder and the autostart entry stay `QuotaGauge`, so existing installs keep working.
+
 ## 2.3.0
 
 ### Added
