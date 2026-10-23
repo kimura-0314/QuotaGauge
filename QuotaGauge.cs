@@ -212,10 +212,38 @@ static class Json {
   }
 
   // "key": { ... } の中身を括弧の対応で切り出す。null や値が無ければ null
+  // 渡した json の直下（1段目）のキーだけを見る。入れ子の同名キーを拾わないため
   public static string Obj(string json, string key) {
+    if (json == null) return null;
+    var re = new Regex("\\G\"" + Regex.Escape(key) + "\"\\s*:\\s*\\{");
+    int depth = 0;
+    bool inStr = false;
+    for (int i = 0; i < json.Length; i++) {
+      char c = json[i];
+      if (inStr) { if (c == '\\') i++; else if (c == '"') inStr = false; continue; }
+      if (c == '"') {
+        if (depth == 1) {
+          var m = re.Match(json, i);
+          if (m.Success) return Block(json, m.Index + m.Length - 1);
+        }
+        inStr = true;
+      }
+      else if (c == '{' || c == '[') depth++;
+      else if (c == '}' || c == ']') depth--;
+    }
+    return null;
+  }
+
+  // 深さを問わず、最初に出てくる "key": { ... } を返す（返事の奥にある rate_limits を取る用）
+  public static string FirstObj(string json, string key) {
+    if (json == null) return null;
     var m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\\{");
-    if (!m.Success) return null;
-    int open = m.Index + m.Length - 1, depth = 0;
+    return m.Success ? Block(json, m.Index + m.Length - 1) : null;
+  }
+
+  // open の位置の { から、対応する } までを返す
+  static string Block(string json, int open) {
+    int depth = 0;
     bool inStr = false;
     for (int i = open; i < json.Length; i++) {
       char c = json[i];
@@ -230,10 +258,10 @@ static class Json {
   // オブジェクト配列を要素ごとの文字列に切り出す
   public static List<string> Objects(string json, string key) {
     var list = new List<string>();
-    int at = json.IndexOf("\"" + key + "\"");
-    if (at < 0) return list;
-    int open = json.IndexOf('[', at);
-    if (open < 0) return list;
+    // "key": の直後が [ の時だけ読む（"limits":null のとき、後ろの別の配列を拾わないため）
+    var m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\\[");
+    if (!m.Success) return list;
+    int open = m.Index + m.Length - 1;
 
     int depth = 1, objStart = -1;
     for (int i = open + 1; i < json.Length; i++) {
@@ -370,12 +398,24 @@ static class ClaudeApi {
     if (p.Limits.Count > 0) return;
 
     // 2.1.303 は "limits" の配列を付けない返事が混ざる。その時は rate_limits の各枠から読む
-    string rl = Json.Obj(body, "rate_limits");
+    string rl = Json.FirstObj(body, "rate_limits");
     if (rl == null) return;
     AddRateLimit(p, rl, "five_hour",        S.T("5時間枠", "5-hour"));
     AddRateLimit(p, rl, "seven_day",        S.T("週次（全体）", "Weekly (all)"));
     AddRateLimit(p, rl, "seven_day_opus",   S.T("週次（Opus）", "Weekly (Opus)"));
     AddRateLimit(p, rl, "seven_day_sonnet", S.T("週次（Sonnet）", "Weekly (Sonnet)"));
+    // モデルごとの週の枠（Fable など）は model_scoped の配列に入っている
+    foreach (var o in Json.Objects(rl, "model_scoped")) {
+      double? u = Json.Num(o, "utilization");
+      string name = Json.Str(o, "display_name");
+      if (!u.HasValue || name == null) continue;
+      var l = new Limit();
+      l.Label = S.T("週次（", "Weekly (") + name + S.T("）", ")");
+      l.Percent = (int)Math.Round(u.Value);
+      l.Severity = l.Percent >= 90 ? "critical" : "normal";
+      l.ResetsAt = Json.Iso(o, "resets_at");
+      p.Limits.Add(l);
+    }
   }
 
   static void AddRateLimit(Provider p, string rl, string key, string label) {
