@@ -18,10 +18,11 @@ No credential files are read, nothing is sent anywhere, no model is called.
 
 1. Install SwiftBar: `brew install --cask swiftbar` (or download it from its GitHub page). Pick a
    plugin folder when it asks.
-2. Put `quotagauge.3m.py` in that folder and make it executable:
+2. Download `quotagauge.3m.py` into that folder and make it executable (replace the folder path
+   with yours):
 
    ```bash
-   chmod +x ~/path/to/plugin-folder/quotagauge.3m.py
+   curl -fsSL https://raw.githubusercontent.com/kimura-0314/QuotaGauge/main/mac/quotagauge.3m.py -o ~/path/to/plugin-folder/quotagauge.3m.py && chmod +x ~/path/to/plugin-folder/quotagauge.3m.py
    ```
 
 3. In the SwiftBar menu, choose **Refresh All**. A percentage appears in the menu bar; click it for
@@ -34,8 +35,9 @@ and `claude` / `codex` installed and signed in. Either one alone is fine.
 
 SwiftBar does not load your shell profile, so tools installed with Homebrew, nvm, etc. may not be on
 its PATH. The plugin adds the usual places (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`,
-`~/.nvm/...`, `~/.volta/bin`) and also asks your login shell for its PATH. If it still cannot find
-them, tell me where `which claude` and `which codex` point.
+`~/.nvm/...`, `~/.volta/bin`), and only if that is not enough it asks your login shell for its PATH.
+"Could not start … (node may be missing)" means the CLI was found but the `node` it needs was not.
+Either way, tell me where `which claude`, `which codex` and `which node` point.
 
 To check from Terminal: `./quotagauge.3m.py --json` prints only the parsed numbers.
 
@@ -59,10 +61,10 @@ Windows 版と同じ数字を、同じやり方（それぞれの CLI 自身に�
 ### 入れ方
 
 1. SwiftBar を入れる：`brew install --cask swiftbar`（GitHub から落としてもよい）。最初にプラグインを置くフォルダを聞かれるので選ぶ
-2. そのフォルダに `quotagauge.3m.py` を置いて、実行できるようにする
+2. そのフォルダに `quotagauge.3m.py` を落として、実行できるようにする（フォルダの場所は自分のものに置き換える）
 
    ```bash
-   chmod +x ~/プラグインのフォルダ/quotagauge.3m.py
+   curl -fsSL https://raw.githubusercontent.com/kimura-0314/QuotaGauge/main/mac/quotagauge.3m.py -o ~/プラグインのフォルダ/quotagauge.3m.py && chmod +x ~/プラグインのフォルダ/quotagauge.3m.py
    ```
 
 3. SwiftBar のメニューから **Refresh All**。メニューバーに % が出て、押すと中身が開く。3分ごとに更新する（ファイル名の `3m`）
@@ -72,8 +74,9 @@ Windows 版と同じ数字を、同じやり方（それぞれの CLI 自身に�
 ### 「見つかりません」と出たら
 
 SwiftBar はシェルの設定を読まないので、Homebrew や nvm で入れたものが見えないことがある。
-よくある置き場所とログインシェルの PATH は足してあるが、それでも出るなら
-ターミナルで `which claude` と `which codex` の結果を教えてほしい。
+よくある置き場所は足してあり、それでも見つからない時だけログインシェルの PATH も足す。
+「起動できませんでした（node が PATH に無い可能性）」は、本体は見つかったが動かすための node が見つからなかったという意味。
+どちらでも、ターミナルで `which claude`・`which codex`・`which node` の結果を教えてほしい。
 
 ターミナルで `./quotagauge.3m.py --json` を打つと、読み取った数字だけを出す。
 

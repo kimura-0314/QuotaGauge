@@ -12,3 +12,4 @@ config.json
 *.bak-*
 last-fetch.txt
 panel-preview.png
+__pycache__/

@@ -54,7 +54,7 @@ def T(ja, en):
 # ------------------------------------------------------------------ PATH
 # SwiftBar / xbar から動くときはログインシェルの設定を読まないので、
 # Homebrew や nvm で入れた claude / codex（と npm 版が使う node）が PATH に無いことが多い。
-# よくある置き場所と、ログインシェルが持っている PATH を足してから探す
+# よくある置き場所を足して探し、それでも見つからない・起動できない時だけログインシェルの PATH を足す
 def _login_shell_path():
     shell = os.environ.get("SHELL") or "/bin/zsh"
     if not os.path.exists(shell):
@@ -99,18 +99,27 @@ ENV["TELEGRAM_STATE_DIR"] = os.path.join(tempfile.gettempdir(), "quotagauge-no-t
 # 作業ディレクトリは固定する（プラグインのフォルダに同名のファイルを置かれても拾わないように）
 WORKDIR = os.path.expanduser("~")
 
+START_FAILED = object()
 _login_tried = False
+_login_lock = threading.Lock()
+
+def _merge_login_path():
+    # Claude と Codex を並列に取るので、ログインシェルを2回走らせないよう鍵をかける
+    global _login_tried
+    with _login_lock:
+        if _login_tried:
+            return
+        _login_tried = True
+        login = _login_shell_path()
+        if login and ":" in login:
+            ENV["PATH"] = login + os.pathsep + ENV["PATH"]
 
 def which(name):
     # ログインシェルを動かすのは、よくある置き場所で見つからない時だけ（3分ごとに rc を走らせない）
-    global _login_tried
     found = shutil.which(name, path=ENV["PATH"])
-    if found or sys.platform != "darwin" or _login_tried:
+    if found or sys.platform != "darwin":
         return found
-    _login_tried = True
-    login = _login_shell_path()
-    if login and ":" in login:
-        ENV["PATH"] = login + os.pathsep + ENV["PATH"]
+    _merge_login_path()
     return shutil.which(name, path=ENV["PATH"])
 
 # ------------------------------------------------------------------ 子プロセス
@@ -120,7 +129,7 @@ def read_until(argv, stdin_lines, match, timeout, close_stdin):
         proc = subprocess.Popen(argv, cwd=WORKDIR, env=ENV, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError:
-        return None
+        return START_FAILED
     found = []
 
     def reader():
@@ -159,7 +168,22 @@ def read_until(argv, stdin_lines, match, timeout, close_stdin):
         except Exception:
             proc.kill()
             proc.wait()
-    return found[0] if found else None
+    if found:
+        return found[0]
+    # npm 版は `#!/usr/bin/env node`。node が PATH に無いと env が 127 で終わる
+    return START_FAILED if proc.returncode == 127 else None
+
+def run_cli(argv, stdin_lines, match, timeout, close_stdin):
+    line = read_until(argv, stdin_lines, match, timeout, close_stdin)
+    if line is START_FAILED and sys.platform == "darwin":
+        # node などが見つからない時だけ、ログインシェルの PATH を足してもう一度
+        _merge_login_path()
+        line = read_until(argv, stdin_lines, match, timeout, close_stdin)
+    return line
+
+def start_failed_msg(name):
+    return T("%s を起動できませんでした（node が PATH に無い可能性）" % name,
+             "Could not start %s (node may be missing from PATH)" % name)
 
 # ------------------------------------------------------------------ 時刻
 def parse_iso(s):
@@ -212,7 +236,10 @@ def fetch_claude():
             "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--settings", '{"hooks":{}}']
     # skip_behaviors＝直近7日の会話ログを読む集計を飛ばす。付けないと 2.1.303 では1分を超える
     req = '{"type":"control_request","request_id":"1","request":{"subtype":"get_usage","skip_behaviors":true}}'
-    line = read_until(argv, [req], lambda l: '"control_response"' in l, 60, close_stdin=True)
+    line = run_cli(argv, [req], lambda l: '"control_response"' in l, 60, close_stdin=True)
+    if line is START_FAILED:
+        p["error"] = start_failed_msg("claude")
+        return p
     if line is None:
         p["error"] = T("claude から応答がありません（ログイン状態を確認）",
                        "No response from claude (check that you are signed in)")
@@ -300,7 +327,10 @@ def fetch_codex():
         '{"name":"QuotaGauge","title":"QuotaGauge","version":"mac-0.1.0"}}}',
         '{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read","params":{}}',
     ]
-    line = read_until([exe, "app-server"], lines, _is_id2, 15, close_stdin=False)
+    line = run_cli([exe, "app-server"], lines, _is_id2, 15, close_stdin=False)
+    if line is START_FAILED:
+        p["error"] = start_failed_msg("codex")
+        return p
     if line is None:
         p["error"] = T("codex app-server から応答がありません", "No response from codex app-server")
         return p
