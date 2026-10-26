@@ -2,5 +2,7 @@
 *.cs text eol=crlf
 *.ps1 text eol=crlf
 *.md text eol=lf
+# Mac で shebang の行末に \r が付くと "env: python3\r" で動かない
+mac/* text eol=lf
 *.png binary
 *.ico binary

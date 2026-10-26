@@ -211,6 +211,8 @@ default data path ended up different too — QuotaGauge asks `claude` for `get_u
 calling the API itself.
 
 If you are on a Mac, install CodexBar. It does more than this ever will.
+A small Mac preview of QuotaGauge itself (a SwiftBar plugin, same numbers, same ask-the-CLI method,
+untested on a real Mac) lives in [mac/](mac/README.md).
 
 ## Author
 
