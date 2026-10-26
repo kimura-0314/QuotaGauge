@@ -10,8 +10,10 @@
 > If you want something mature, use [CodexBar](https://github.com/steipete/CodexBar). It does far more.
 
 A menu bar plugin for [SwiftBar](https://github.com/swiftbar/SwiftBar) (or xbar) that shows your
-Claude Code and Codex usage limits — the same numbers as the Windows tray app, got the same way:
-it asks each CLI itself (`claude` → `get_usage`, `codex app-server` → `account/rateLimits/read`).
+Claude Code and Codex usage limits — plus Antigravity (`agy`) and Grok Build (`grok`) when they are
+installed — the same numbers as the Windows tray app, got the same way: it asks each CLI itself
+(`claude` → `get_usage`, `codex app-server` → `account/rateLimits/read`, `agy --print /quota`,
+`grok agent stdio` → `_x.ai/billing`).
 No credential files are read, nothing is sent anywhere, no model is called.
 
 ## Install
@@ -29,7 +31,8 @@ No credential files are read, nothing is sent anywhere, no model is called.
    the details. It refreshes every 3 minutes (the `3m` in the file name).
 
 Needs: macOS with `/usr/bin/python3` (if macOS offers to install the Command Line Tools, accept),
-and `claude` / `codex` installed and signed in. Either one alone is fine.
+and `claude` / `codex` installed and signed in. Either one alone is fine. `agy` and `grok` show up
+only if they are found; nothing to switch on.
 
 ## If it says "not found"
 
@@ -55,6 +58,7 @@ Language follows the first entry of your macOS languages. Force it with `QUOTAGA
 > ちゃんとしたものが欲しいなら [CodexBar](https://github.com/steipete/CodexBar) を入れたほうがいい。
 
 [SwiftBar](https://github.com/swiftbar/SwiftBar)（xbar でも可）で動くメニューバー用のプラグイン。
+Claude Code と Codex に加えて、Antigravity（`agy`）と Grok Build（`grok`）も入っていれば出す。
 Windows 版と同じ数字を、同じやり方（それぞれの CLI 自身に聞く）で出す。
 認証情報のファイルは読まない・どこにも送らない・モデルは呼ばない。
 
@@ -69,7 +73,7 @@ Windows 版と同じ数字を、同じやり方（それぞれの CLI 自身に�
 
 3. SwiftBar のメニューから **Refresh All**。メニューバーに % が出て、押すと中身が開く。3分ごとに更新する（ファイル名の `3m`）
 
-要るもの：macOS の `/usr/bin/python3`（「コマンドラインツールを入れますか」と出たら入れる）と、ログイン済みの `claude`／`codex`（片方だけでもよい）。
+要るもの：macOS の `/usr/bin/python3`（「コマンドラインツールを入れますか」と出たら入れる）と、ログイン済みの `claude`／`codex`（片方だけでもよい）。`agy`・`grok` は見つかった時だけ出る（オンにする操作は要らない）。
 
 ### 「見つかりません」と出たら
 

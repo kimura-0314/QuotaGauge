@@ -4,7 +4,7 @@
 # <xbar.version>v0.1.0</xbar.version>
 # <xbar.author>kimura</xbar.author>
 # <xbar.author.github>kimura-0314</xbar.author.github>
-# <xbar.desc>Claude Code and Codex usage limits in the menu bar. Asks each CLI itself.</xbar.desc>
+# <xbar.desc>Claude Code, Codex, Antigravity and Grok Build usage limits in the menu bar. Asks each CLI itself.</xbar.desc>
 # <xbar.abouturl>https://github.com/kimura-0314/QuotaGauge</xbar.abouturl>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
@@ -114,10 +114,11 @@ def _merge_login_path():
         if login and ":" in login:
             ENV["PATH"] = login + os.pathsep + ENV["PATH"]
 
-def which(name):
-    # ログインシェルを動かすのは、よくある置き場所で見つからない時だけ（3分ごとに rc を走らせない）
+def which(name, optional=False):
+    # ログインシェルを動かすのは、よくある置き場所で見つからない時だけ（3分ごとに rc を走らせない）。
+    # agy / grok は入れていない人の方が多いので、それだけのためにはログインシェルを動かさない
     found = shutil.which(name, path=ENV["PATH"])
-    if found or sys.platform != "darwin":
+    if found or sys.platform != "darwin" or optional:
         return found
     _merge_login_path()
     return shutil.which(name, path=ENV["PATH"])
@@ -393,8 +394,108 @@ def _codex_add(p, o, name):
     reset = from_unix(o["resetsAt"]) if o.get("resetsAt") is not None else None
     p["limits"].append(limit(label, o["usedPercent"], reset))
 
+# ------------------------------------------------------------------ agy（Antigravity CLI）
+# print モードの `/quota` は turn を起こさずに答える（agy 1.1.11 以降）。
+# 週次のグループ（Gemini 系／Claude・GPT 系）ごとに remaining_fraction と reset_time を返す
+def fetch_agy():
+    exe = which("agy", optional=True)
+    if not exe:
+        return None   # 入れていない人には出さない
+    p = {"key": "agy", "name": "Antigravity", "note": None, "limits": [], "error": None}
+    line = run_cli([exe, "--output-format", "json", "--print", "/quota"], [],
+                   lambda l: '"groups"' in l, 40, close_stdin=True)
+    if line is START_FAILED:
+        p["error"] = start_failed_msg("agy")
+        return p
+    if line is None:
+        p["error"] = T("agy から応答がありません（ログイン状態を確認）",
+                       "No response from agy (check that you are signed in)")
+        return p
+    try:
+        d = json.loads(line)
+    except ValueError:
+        p["error"] = T("agy の返事を読めませんでした", "Could not parse the reply from agy")
+        return p
+    # turn が走ったなら /quota として扱われていない
+    if (_find(d, "num_turns") or 0) > 0:
+        p["error"] = T("agy が /quota を実行しませんでした（版が古い？）", "agy did not answer /quota (old version?)")
+        return p
+    for grp in _find(d, "groups") or []:
+        if not isinstance(grp, dict):
+            continue
+        name = str(grp.get("name") or "")
+        short = "Gemini" if "gemini" in name.lower() else "Claude/GPT" if "claude" in name.lower() else name
+        for b in grp.get("buckets") or []:
+            if not isinstance(b, dict) or b.get("remaining_fraction") is None:
+                continue
+            win = b.get("window") or ""
+            # 週次しか無いので「週次」は書かず、モデル群の名前だけにする
+            label = short if win == "weekly" else "%s (%s)" % (short, win)
+            p["limits"].append(limit(label, (1 - float(b["remaining_fraction"])) * 100,
+                                     parse_iso(b.get("reset_time"))))
+    if not p["limits"]:
+        p["error"] = T("利用枠の情報が空でした", "The usage data was empty")
+    return p
+
+# ------------------------------------------------------------------ grok（Grok Build）
+# `grok agent stdio` は ACP（JSON-RPC）で話す。拡張メソッドは `_x.ai/…`（先頭アンダースコア）。
+# `_x.ai/billing` が creditUsagePercent（1.0 = 1%）と週の期間を返す。
+# ⚠ initialize 直後の通知に MCP 設定の環境変数（トークン類）がそのまま流れてくる。生の行は絶対に出さない
+def fetch_grok():
+    exe = which("grok", optional=True)
+    if not exe:
+        return None
+    p = {"key": "grok", "name": "Grok Build", "note": None, "limits": [], "error": None}
+    lines = [
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,'
+        '"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}',
+        '{"jsonrpc":"2.0","id":2,"method":"_x.ai/billing","params":{}}',
+    ]
+    line = run_cli([exe, "agent", "stdio"], lines, _is_id2, 40, close_stdin=False)
+    if line is START_FAILED:
+        p["error"] = start_failed_msg("grok")
+        return p
+    if line is None:
+        p["error"] = T("grok から応答がありません（ログイン状態を確認）",
+                       "No response from grok (check that you are signed in)")
+        return p
+    try:
+        d = json.loads(line)
+    except ValueError:
+        p["error"] = T("grok の返事を読めませんでした", "Could not parse the reply from grok")
+        return p
+    if d.get("error"):
+        err = d["error"]
+        p["error"] = (err.get("message") if isinstance(err, dict) else str(err)) or T("利用枠を取得できませんでした", "Could not read the usage data")
+        return p
+    res = d.get("result") or {}
+    cfg = _find(res, "config")
+    if not isinstance(cfg, dict):
+        p["error"] = T("利用枠の情報がありません", "No usage data")
+        return p
+    p["note"] = _find(res, "subscription_tier")
+    used = cfg.get("creditUsagePercent")
+    if used is not None:
+        period = cfg.get("currentPeriod") if isinstance(cfg.get("currentPeriod"), dict) else {}
+        label = T("週次クレジット", "Weekly credits") if "WEEKLY" in str(period.get("type") or "") \
+            else T("クレジット", "Credits")
+        p["limits"].append(limit(label, float(used), parse_iso(period.get("end"))))
+    # 従量（on-demand）を使う設定なら、その消化も1本出す
+    cap, od = cfg.get("onDemandCap"), cfg.get("onDemandUsed")
+    cap_v = cap.get("val") if isinstance(cap, dict) else None
+    od_v = od.get("val") if isinstance(od, dict) else None
+    try:
+        if cap_v and float(cap_v) > 0 and od_v is not None:
+            p["limits"].append(limit(T("従量分", "On-demand"), float(od_v) * 100 / float(cap_v), None))
+    except (TypeError, ValueError):
+        pass
+    if not p["limits"]:
+        p["error"] = T("利用枠の情報が空でした", "The usage data was empty")
+    return p
+
 # ------------------------------------------------------------------ 表示
-ACCENT = {"claude": "#D97757", "codex": "#10A37F"}
+# grok の墨色は暗いメニューで読めないので、明暗で色を分ける
+ACCENT = {"claude": "#D97757", "codex": "#10A37F", "agy": "#4285F4", "grok": "#374151,#D1D5DB"}
 WARN, CRIT = "#D97706", "#DC3E3E"
 MUTED = "#8E8E93"
 
@@ -458,16 +559,16 @@ def render(providers):
     return "\n".join(out)
 
 def main():
-    jobs = [fetch_claude, fetch_codex]
+    # agy / grok は入っている時だけ出す（見つからなければ None が返って行ごと消える）
+    jobs = [fetch_claude, fetch_codex, fetch_agy, fetch_grok]
+    names = ["Claude Code", "Codex", "Antigravity", "Grok Build"]
     results = [None] * len(jobs)
 
     def run(i):
         try:
             results[i] = jobs[i]()
         except Exception as ex:
-            names = ["Claude Code", "Codex"]
-            results[i] = {"key": "?", "name": names[i] if i < len(names) else "?", "note": None,
-                          "limits": [], "error": str(ex)}
+            results[i] = {"key": "?", "name": names[i], "note": None, "limits": [], "error": str(ex)}
 
     threads = [threading.Thread(target=run, args=(i,), daemon=True) for i in range(len(jobs))]
     for t in threads:
