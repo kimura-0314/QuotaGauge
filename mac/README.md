@@ -38,7 +38,7 @@ only if they are found; nothing to switch on.
 
 SwiftBar does not load your shell profile, so tools installed with Homebrew, nvm, etc. may not be on
 its PATH. The plugin adds the usual places (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`,
-`~/.nvm/...`, `~/.volta/bin`), and only if that is not enough it asks your login shell for its PATH.
+`~/.nvm/...`, `~/.volta/bin`, `~/.grok/bin`), and only if that is not enough it asks your login shell for its PATH.
 "Could not start … (node may be missing)" means the CLI was found but the `node` it needs was not.
 Either way, tell me where `which claude`, `which codex` and `which node` point.
 If `agy` or `grok` does not show up, check that `which agy` / `which grok` is in one of the usual
@@ -80,7 +80,7 @@ Windows 版と同じ数字を、同じやり方（それぞれの CLI 自身に�
 ### 「見つかりません」と出たら
 
 SwiftBar はシェルの設定を読まないので、Homebrew や nvm で入れたものが見えないことがある。
-よくある置き場所は足してあり、それでも見つからない時だけログインシェルの PATH も足す。
+よくある置き場所（`/opt/homebrew/bin`・`/usr/local/bin`・`~/.local/bin`・`~/.nvm/...`・`~/.volta/bin`・`~/.grok/bin`）は足してあり、それでも見つからない時だけログインシェルの PATH も足す。
 「起動できませんでした（node が PATH に無い可能性）」は、本体は見つかったが動かすための node が見つからなかったという意味。
 どちらでも、ターミナルで `which claude`・`which codex`・`which node` の結果を教えてほしい。
 `agy`・`grok` が出ない時は、`which agy`／`which grok` の場所が上の定番の置き場所にあるかを見る（この2つのためにはログインシェルを聞きに行かない）。

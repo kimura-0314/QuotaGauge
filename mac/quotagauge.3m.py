@@ -77,6 +77,7 @@ def _build_path():
         os.path.join(home, ".local/bin"), os.path.join(home, ".claude/local"),
         os.path.join(home, ".npm-global/bin"), os.path.join(home, ".volta/bin"),
         os.path.join(home, ".bun/bin"), os.path.join(home, ".asdf/shims"),
+        os.path.join(home, ".grok/bin"),
     ]
     nvm = os.path.join(home, ".nvm/versions/node")
     if os.path.isdir(nvm):
@@ -160,7 +161,7 @@ def read_until(argv, stdin_lines, match, timeout, close_stdin):
     except Exception:
         pass
     try:
-        proc.wait(3)
+        proc.wait(5)
     except Exception:
         # npm 版 codex は SIGTERM を本体へ転送するが SIGKILL は転送しない。先に TERM を送る
         proc.terminate()
@@ -431,8 +432,11 @@ def fetch_agy():
             win = b.get("window") or ""
             # 週次しか無いので「週次」は書かず、モデル群の名前だけにする
             label = short if win == "weekly" else "%s (%s)" % (short, win)
-            p["limits"].append(limit(label, (1 - float(b["remaining_fraction"])) * 100,
-                                     parse_iso(b.get("reset_time"))))
+            try:
+                pct = (1 - float(b["remaining_fraction"])) * 100
+            except (TypeError, ValueError):
+                continue
+            p["limits"].append(limit(label, pct, parse_iso(b.get("reset_time"))))
     if not p["limits"]:
         p["error"] = T("利用枠の情報が空でした", "The usage data was empty")
     return p
@@ -473,13 +477,17 @@ def fetch_grok():
     if not isinstance(cfg, dict):
         p["error"] = T("利用枠の情報がありません", "No usage data")
         return p
-    p["note"] = _find(res, "subscription_tier")
+    tier = _find(res, "subscription_tier")
+    p["note"] = tier if isinstance(tier, str) else None
     used = cfg.get("creditUsagePercent")
     if used is not None:
         period = cfg.get("currentPeriod") if isinstance(cfg.get("currentPeriod"), dict) else {}
         label = T("週次クレジット", "Weekly credits") if "WEEKLY" in str(period.get("type") or "") \
             else T("クレジット", "Credits")
-        p["limits"].append(limit(label, float(used), parse_iso(period.get("end"))))
+        try:
+            p["limits"].append(limit(label, float(used), parse_iso(period.get("end"))))
+        except (TypeError, ValueError):
+            pass
     # 従量（on-demand）を使う設定なら、その消化も1本出す
     cap, od = cfg.get("onDemandCap"), cfg.get("onDemandUsed")
     cap_v = cap.get("val") if isinstance(cap, dict) else None
